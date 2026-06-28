@@ -177,6 +177,13 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "cooldown_every": 3,
     },
     "x_profile_tweets": {
+        "max_tweets_per_author": 50,
+        "max_scrolls": 80,
+        "initial_load_delay": 2.0,
+    },
+    "x_profile_bundle": {
+        "max_tweets_per_author": 50,
+        "max_scrolls": 80,
         "initial_load_delay": 2.0,
     },
     "x_top_comments": {
@@ -384,4 +391,3 @@ def delete_profile(tool_id: str, profile: str) -> bool:
         path.unlink()
         return True
     return False
-

@@ -22,6 +22,7 @@ from src.core import (
 )
 from src.platforms.x_twitter.profile_tweets import (
     DEFAULT_MAX_SCROLLS,
+    DEFAULT_PROFILE_TWEET_LIMIT,
     INITIAL_LOAD_DELAY,
     NO_NEW_SCROLL_LIMIT,
     PAGE_LOAD_TIMEOUT,
@@ -156,16 +157,17 @@ def run_x_profile_bundle_spider(
         scroll_delay = float(config.get("scroll_interval", SCROLL_DELAY))
         no_new_scroll_limit = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
         max_scrolls = int(config.get("max_scrolls", DEFAULT_MAX_SCROLLS))
-        max_tweets_per_author = int(config.get("max_tweets_per_author", 100))
+        max_tweets_per_author = max(1, int(config.get("max_tweets_per_author", DEFAULT_PROFILE_TWEET_LIMIT)))
         scroll_px = int(config.get("scroll_px", SCROLL_PX))
         initial_load_delay = float(config.get("initial_load_delay", INITIAL_LOAD_DELAY))
         date_window_size = int(config.get("date_window_size", 20))
         include_reposts = str(config.get("include_reposts", "否")).strip() == "是"
 
-        limit_time_bool = limit_time_str == "是"
+        requested_time_limit = limit_time_str == "是"
+        limit_time_bool = False
         start_dt = end_dt = None
-        if limit_time_bool:
-            start_dt, end_dt = _parse_date_range(start_date, end_date)
+        if requested_time_limit:
+            log_line(log_callback, "主页推文采集采用最新数量优先，已忽略时间窗口过滤。")
 
         output_path = build_output_path(
             "x",

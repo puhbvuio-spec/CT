@@ -52,7 +52,7 @@ def test_x_profile_bundle_defaults_and_discovery():
     window = XProfileBundleWindow.__new__(XProfileBundleWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
 
-    assert defaults["max_tweets_per_author"] == 100
+    assert defaults["max_tweets_per_author"] == 50
     assert defaults["max_scrolls"] == 80
 
     static_ids = {tool.tool_id for tool in TOOLS}
