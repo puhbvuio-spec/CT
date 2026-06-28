@@ -1,0 +1,332 @@
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+chcp 65001 >nul
+
+rem One-click installer/updater for Social Platform Scraper.
+rem Usage:
+rem   install_or_update.bat
+rem   install_or_update.bat --no-start
+rem   install_or_update.bat --check-only
+rem Optional:
+rem   set SCRAPER_INSTALL_DIR=D:\tools\social-platform-scraper
+
+set "APP_NAME=Social Platform Scraper"
+set "REPO_URL=https://github.com/puhbvuio-spec/CT.git"
+set "DEFAULT_DIR=%USERPROFILE%\social-platform-scraper"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
+set "NO_START=0"
+set "CHECK_ONLY=0"
+set "NO_PAUSE=0"
+
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="--no-start" set "NO_START=1"
+if /I "%~1"=="--check-only" set "CHECK_ONLY=1"
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+if /I "%~1"=="--help" goto help
+if /I "%~1"=="/?" goto help
+shift
+goto parse_args
+
+:args_done
+if defined SCRAPER_INSTALL_DIR (
+    set "INSTALL_DIR=%SCRAPER_INSTALL_DIR%"
+) else (
+    if exist "%SCRIPT_DIR%\main.py" (
+        if exist "%SCRIPT_DIR%\requirements.txt" (
+            set "INSTALL_DIR=%SCRIPT_DIR%"
+        ) else (
+            set "INSTALL_DIR=%DEFAULT_DIR%"
+        )
+    ) else (
+        set "INSTALL_DIR=%DEFAULT_DIR%"
+    )
+)
+
+echo.
+echo ============================================================
+echo   %APP_NAME% installer / updater
+echo ============================================================
+echo Target directory: "%INSTALL_DIR%"
+echo Repository:       %REPO_URL%
+echo.
+
+call :require_git || goto failed
+call :find_python || goto failed
+call :check_python_version || goto failed
+call :check_browsers
+
+if "%CHECK_ONLY%"=="1" (
+    echo.
+    echo [OK] Check-only mode completed. No files were changed.
+    goto success
+)
+
+call :prepare_source || goto failed
+call :setup_venv || goto failed
+call :install_requirements || goto failed
+call :install_playwright || goto failed
+call :verify_runtime || goto failed
+call :ensure_runtime_dirs || goto failed
+call :print_notes
+
+if "%NO_START%"=="1" (
+    echo.
+    echo [OK] Install/update completed. Start later with run.bat.
+    goto success
+)
+
+if exist "%INSTALL_DIR%\run.bat" (
+    echo.
+    echo Starting %APP_NAME% ...
+    start "" "%INSTALL_DIR%\run.bat"
+) else (
+    echo.
+    echo [WARN] run.bat was not found. You can start manually:
+    echo        "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\main.py"
+)
+
+goto success
+
+:help
+echo.
+echo Usage:
+echo   install_or_update.bat              Install/update, then start the app
+echo   install_or_update.bat --no-start   Install/update only
+echo   install_or_update.bat --check-only Check Git, Python, browser only
+echo.
+echo Optional environment variable:
+echo   SCRAPER_INSTALL_DIR=D:\tools\social-platform-scraper
+echo.
+exit /b 0
+
+:require_git
+where git >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Git was not found.
+    echo Install Git for Windows first: https://git-scm.com/download/win
+    exit /b 1
+)
+for /f "tokens=*" %%V in ('git --version 2^>^&1') do echo Git: %%V
+exit /b 0
+
+:find_python
+set "PY_CMD="
+where py >nul 2>nul
+if not errorlevel 1 (
+    py -3 --version >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=py -3"
+)
+if not defined PY_CMD (
+    where python >nul 2>nul
+    if not errorlevel 1 (
+        python --version >nul 2>nul
+        if not errorlevel 1 set "PY_CMD=python"
+    )
+)
+if not defined PY_CMD (
+    echo [ERROR] Python 3 was not found.
+    echo Install Python 3.10+ first: https://www.python.org/downloads/windows/
+    exit /b 1
+)
+for /f "tokens=*" %%V in ('!PY_CMD! --version 2^>^&1') do echo Python: %%V
+exit /b 0
+
+:check_python_version
+!PY_CMD! -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo [ERROR] Python 3.10 or newer is required.
+    exit /b 1
+)
+exit /b 0
+
+:check_browsers
+set "FOUND_CHROME=0"
+set "FOUND_EDGE=0"
+set "CHROME_HINT="
+set "EDGE_HINT="
+for %%P in (
+    "%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+    "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+    "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
+) do (
+    if exist "%%~P" (
+        set "FOUND_CHROME=1"
+        set "CHROME_HINT=%%~P"
+    )
+)
+for %%P in (
+    "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
+    "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+    "%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"
+) do (
+    if exist "%%~P" (
+        set "FOUND_EDGE=1"
+        set "EDGE_HINT=%%~P"
+    )
+)
+where chrome >nul 2>nul
+if not errorlevel 1 (
+    set "FOUND_CHROME=1"
+    if not defined CHROME_HINT set "CHROME_HINT=chrome.exe from PATH"
+)
+where msedge >nul 2>nul
+if not errorlevel 1 (
+    set "FOUND_EDGE=1"
+    if not defined EDGE_HINT set "EDGE_HINT=msedge.exe from PATH"
+)
+if "%FOUND_CHROME%"=="1" echo Chrome: !CHROME_HINT!
+if "%FOUND_EDGE%"=="1" echo Edge:   !EDGE_HINT!
+if "%FOUND_CHROME%"=="0" if "%FOUND_EDGE%"=="0" (
+    echo [WARN] Chrome/Edge was not detected. Browser-based scraping needs one of them.
+)
+exit /b 0
+
+:prepare_source
+if exist "%INSTALL_DIR%\.git" (
+    echo.
+    echo Updating existing repository...
+    pushd "%INSTALL_DIR%" || exit /b 1
+    set "CURRENT_REMOTE="
+    for /f "delims=" %%R in ('git remote get-url origin 2^>nul') do set "CURRENT_REMOTE=%%R"
+    if defined CURRENT_REMOTE (
+        if /I not "!CURRENT_REMOTE!"=="%REPO_URL%" (
+            echo [WARN] Current origin is "!CURRENT_REMOTE!".
+            echo        Expected "%REPO_URL%". Pulling from the current origin.
+        )
+    ) else (
+        echo [WARN] No git origin was found. Skipping git update.
+        popd
+        exit /b 0
+    )
+    git fetch --all --prune
+    if errorlevel 1 (
+        popd
+        exit /b 1
+    )
+    git pull --ff-only
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Git update failed. Local code changes may conflict with the remote branch.
+        echo        Commit/stash your local changes, or install to a clean directory.
+        popd
+        exit /b 1
+    )
+    popd
+    exit /b 0
+)
+
+if exist "%INSTALL_DIR%\main.py" (
+    echo.
+    echo [WARN] Source files exist, but this is not a git clone.
+    echo        Dependencies will be installed, but automatic git update is unavailable.
+    exit /b 0
+)
+
+if exist "%INSTALL_DIR%" (
+    dir /b "%INSTALL_DIR%" 2>nul | findstr /r "." >nul
+    if not errorlevel 1 (
+        echo [ERROR] Target directory exists but is not empty and not a git repository:
+        echo        "%INSTALL_DIR%"
+        echo        Set SCRAPER_INSTALL_DIR to another path, or clean this directory first.
+        exit /b 1
+    )
+) else (
+    for %%I in ("%INSTALL_DIR%") do set "PARENT_DIR=%%~dpI"
+    if not exist "!PARENT_DIR!" mkdir "!PARENT_DIR!"
+)
+
+echo.
+echo Cloning repository...
+git clone "%REPO_URL%" "%INSTALL_DIR%"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:setup_venv
+set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+    echo.
+    echo Virtual environment: "%INSTALL_DIR%\venv"
+    exit /b 0
+)
+echo.
+echo Creating virtual environment...
+!PY_CMD! -m venv "%INSTALL_DIR%\venv"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:install_requirements
+set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
+if not exist "%INSTALL_DIR%\requirements.txt" (
+    echo [ERROR] requirements.txt was not found in "%INSTALL_DIR%".
+    exit /b 1
+)
+echo.
+echo Installing Python dependencies...
+"%VENV_PY%" -m pip install --upgrade pip setuptools wheel
+if errorlevel 1 exit /b 1
+"%VENV_PY%" -m pip install -r "%INSTALL_DIR%\requirements.txt"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:install_playwright
+set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
+echo.
+echo Installing Playwright Chromium runtime...
+"%VENV_PY%" -m playwright install chromium
+if errorlevel 1 (
+    echo [WARN] Playwright browser installation failed.
+    echo        The app can still use local Chrome/Edge via CDP, but rerun this command later if needed:
+    echo        "%VENV_PY%" -m playwright install chromium
+)
+exit /b 0
+
+:verify_runtime
+set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
+echo.
+echo Verifying runtime imports...
+"%VENV_PY%" -c "import PyQt5, openpyxl, playwright; import src.studio.qt_app; print('Runtime import OK')"
+if errorlevel 1 (
+    echo [ERROR] Runtime import check failed.
+    exit /b 1
+)
+exit /b 0
+
+:ensure_runtime_dirs
+if not exist "%INSTALL_DIR%\output" mkdir "%INSTALL_DIR%\output"
+if not exist "%INSTALL_DIR%\user_data" mkdir "%INSTALL_DIR%\user_data"
+if not exist "%INSTALL_DIR%\user_data_edge" mkdir "%INSTALL_DIR%\user_data_edge"
+if not exist "%INSTALL_DIR%\.env" (
+    echo.
+    echo [WARN] .env was not found. YouTube API / AIGC tools may need API keys.
+    if exist "%INSTALL_DIR%\.env.example" (
+        echo        See "%INSTALL_DIR%\.env.example".
+    )
+)
+exit /b 0
+
+:print_notes
+echo.
+echo Notes:
+echo   - Re-run install_or_update.bat any time to update code and dependencies.
+echo   - Chrome CDP uses port 9222 and user_data.
+echo   - Edge CDP uses port 9223 and user_data_edge.
+echo   - X tools can switch browser in the app global settings.
+echo   - output, user_data, user_data_edge and .env are kept locally.
+exit /b 0
+
+:failed
+echo.
+echo [FAILED] Install/update did not complete.
+if "%NO_PAUSE%"=="1" exit /b 1
+pause
+exit /b 1
+
+:success
+echo.
+echo [DONE]
+if "%NO_PAUSE%"=="1" exit /b 0
+pause
+exit /b 0
