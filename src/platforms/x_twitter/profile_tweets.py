@@ -28,6 +28,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
 
 
 def _parse_date_range(start_str: str, end_str: str):
@@ -148,7 +149,7 @@ def _wait_for_exact_profile_result(page, username: str, timeout_ms: int) -> bool
             return False
 
 
-def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=None, pause_event=None) -> bool:
+def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=None, pause_event=None, log_callback=None) -> bool:
     deadline = time.monotonic() + max(1.0, float(timeout_ms or 1000) / 1000.0)
     while time.monotonic() < deadline:
         if should_stop(stop_event):
@@ -156,6 +157,15 @@ def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=N
         if wait_if_paused(pause_event, stop_event):
             return False
         if _current_page_is_profile(page, username):
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=timeout_ms,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label=f"作者主页 @{username}",
+            ):
+                return False
             try:
                 page.wait_for_selector(
                     'div[data-testid="UserName"], div[data-testid="UserDescription"], article[data-testid="tweet"], article',
@@ -215,6 +225,16 @@ def navigate_to_profile_via_search(
     except Exception as exc:
         log_warn(log_callback, f"  搜索页加载异常，继续尝试读取已加载结果：{exc}")
 
+    if not wait_for_x_page_recovery(
+        page,
+        log_callback=log_callback,
+        page_timeout=page_timeout,
+        stop_event=stop_event,
+        pause_event=pause_event,
+        context_label="X 搜索页",
+    ):
+        return False
+
     try:
         page.wait_for_selector('main, div[data-testid="primaryColumn"], a[href]', timeout=min(int(page_timeout), 10000))
     except Exception:
@@ -231,6 +251,15 @@ def navigate_to_profile_via_search(
         if should_stop(stop_event):
             return False
         if wait_if_paused(pause_event, stop_event):
+            return False
+        if not wait_for_x_page_recovery(
+            page,
+            log_callback=log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            context_label="X 搜索页",
+        ):
             return False
 
         remaining_ms = max(1000, int((search_deadline - time.monotonic()) * 1000))
@@ -255,6 +284,7 @@ def navigate_to_profile_via_search(
                 min(int(page_timeout), 20000),
                 stop_event=stop_event,
                 pause_event=pause_event,
+                log_callback=log_callback,
             ):
                 return True
             log_warn(log_callback, f"  搜索结果已点击但主页尚未稳定，重试：@{username}")
@@ -266,6 +296,15 @@ def navigate_to_profile_via_search(
         if attempt % 3 == 0:
             try:
                 page.reload(wait_until="domcontentloaded", timeout=page_timeout)
+                if not wait_for_x_page_recovery(
+                    page,
+                    log_callback=log_callback,
+                    page_timeout=page_timeout,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    context_label="X 搜索页",
+                ):
+                    return False
                 interruptible_sleep(max(1.0, float(initial_delay)), stop_event)
             except Exception:
                 pass
@@ -583,9 +622,27 @@ def collect_profile_tweets(
                 initial_delay=initial_load_delay,
             ):
                 raise RuntimeError(f"未能通过搜索页进入作者主页：{profile_url}")
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label=f"作者主页 @{username}",
+            ):
+                raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             interruptible_sleep(initial_load_delay, stop_event)
         else:
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label=f"作者主页 @{username}",
+            ):
+                raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             # 页面已由调用方加载，只需等待渲染完成
             try:
                 page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
@@ -609,6 +666,15 @@ def collect_profile_tweets(
         if should_stop(stop_event):
             break
         if wait_if_paused(pause_event, stop_event):
+            break
+        if not wait_for_x_page_recovery(
+            page,
+            log_callback=log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            context_label=f"作者主页 @{username}",
+        ):
             break
 
         for text_lbl in ['view original', '查看原文', '原文を表示', 'show original', '原文を見る', 'show more', 'show more...', 'もっと見る', '더 보기', '显示更多']:

@@ -20,6 +20,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
 from src.platforms.x_twitter.profile_tweets import navigate_to_profile_via_search
 
 OUTPUT_FIELDS = ["推文链接", "作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
@@ -148,13 +149,22 @@ def find_target_article(page, target_status_id: str):
             continue
     return articles[0] if articles else None
 
-def load_tweet_page(page, tweet_url: str, target_status_id: str, log_callback, page_timeout=None, tweet_ready_timeout=None) -> bool:
+def load_tweet_page(page, tweet_url: str, target_status_id: str, log_callback, page_timeout=None, tweet_ready_timeout=None, stop_event=None, pause_event=None) -> bool:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
     if tweet_ready_timeout is None:
         tweet_ready_timeout = TWEET_READY_TIMEOUT
     try:
         page.goto(tweet_url, wait_until="domcontentloaded", timeout=page_timeout)
+        if not wait_for_x_page_recovery(
+            page,
+            log_callback=log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            context_label="X 推文页",
+        ):
+            return False
         page.wait_for_selector('article[data-testid="tweet"]', timeout=tweet_ready_timeout)
         return True
     except Exception as e:
@@ -245,6 +255,13 @@ def extract_followers_count(page, profile_url: str, page_timeout=None, stop_even
             current_clean = page.url.rstrip('/').lower()
             if target_clean not in current_clean:
                 page.goto(profile_url, wait_until="domcontentloaded", timeout=page_timeout)
+                if not wait_for_x_page_recovery(
+                    page,
+                    page_timeout=page_timeout,
+                    stop_event=stop_event,
+                    context_label="X 作者主页",
+                ):
+                    return ""
         except Exception:
             return ""
 
@@ -319,7 +336,7 @@ def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_ca
         log_warn(log_callback, f"跳过：无法解析推文 ID：{tweet_url}")
         return None
 
-    if not load_tweet_page(tweet_page, tweet_url, target_status_id, log_callback, page_timeout=page_timeout, tweet_ready_timeout=tweet_ready_timeout):
+    if not load_tweet_page(tweet_page, tweet_url, target_status_id, log_callback, page_timeout=page_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event):
         log_warn(log_callback, f"跳过：推文页面一直卡在 X 启动页或未渲染正文：{tweet_url}")
         return None
 
@@ -358,6 +375,15 @@ def extract_profile_record(profile_page, profile_url: str, log_callback, page_ti
         except Exception as e:
             log_warn(log_callback, f"跳过：无法加载主页：{profile_url}，错误：{e}")
             return None
+
+    if not wait_for_x_page_recovery(
+        profile_page,
+        log_callback=log_callback,
+        page_timeout=page_timeout if page_timeout is not None else PAGE_LOAD_TIMEOUT,
+        stop_event=stop_event,
+        context_label="X 作者主页",
+    ):
+        return None
 
     # Extract account ID from URL
     account_match = re.search(r"x\.com/([^/?#]+)/?$", profile_url)

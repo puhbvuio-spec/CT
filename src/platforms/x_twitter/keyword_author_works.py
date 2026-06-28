@@ -22,6 +22,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
 from src.platforms.x_twitter.keyword import (
     MAX_SEARCH_SCROLLS,
     _find_recommendation_boundary_index,
@@ -265,6 +266,15 @@ def collect_seed_authors(
                 page.goto(search_url, wait_until="domcontentloaded", timeout=page_timeout)
             except Exception:
                 log_warn(log_callback, "  搜索页加载超时，继续读取已加载内容。")
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label="X 关键词搜索页",
+            ):
+                break
             if interruptible_sleep(4.0, stop_event):
                 break
             _try_reload_if_empty(
@@ -283,6 +293,15 @@ def collect_seed_authors(
                 if seed_count >= max_seed_works or should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):
+                    break
+                if not wait_for_x_page_recovery(
+                    page,
+                    log_callback=log_callback,
+                    page_timeout=page_timeout,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    context_label="X 关键词搜索页",
+                ):
                     break
 
                 try:
