@@ -30,10 +30,11 @@ from src.platforms.x_twitter.profile_tweets import (
     SCROLL_PX,
     collect_profile_tweets,
     extract_profile_username,
-    navigate_to_profile_via_search,
+    navigate_to_profile,
     normalize_scroll_delay_range,
     parse_profile_urls,
     row_from_tweet,
+    use_profile_search_entry,
 )
 from src.platforms.x_twitter.profiles import extract_profile_record, normalize_x_url
 
@@ -168,6 +169,7 @@ def run_x_profile_bundle_spider(
         date_window_size = int(config.get("date_window_size", 20))
         include_reposts = str(config.get("include_reposts", "否")).strip() == "是"
         browser_choice = config.get("browser")
+        search_entry_enabled = use_profile_search_entry(config)
 
         requested_time_limit = limit_time_str == "是"
         limit_time_bool = False
@@ -233,7 +235,7 @@ def run_x_profile_bundle_spider(
                 profile_ready = False
                 profile_record_ok = False
                 try:
-                    profile_ready = navigate_to_profile_via_search(
+                    profile_ready = navigate_to_profile(
                         page,
                         profile_url,
                         log_callback,
@@ -242,9 +244,10 @@ def run_x_profile_bundle_spider(
                         pause_event=pause_event,
                         initial_delay=initial_load_delay,
                         recovery_config=config,
+                        use_search_entry=search_entry_enabled,
                     )
                     if not profile_ready:
-                        log_warn(log_callback, f"  未能通过搜索页进入作者主页，使用链接兜底：{profile_url}")
+                        log_warn(log_callback, f"  未能进入作者主页，使用链接兜底：{profile_url}")
                         profile_record = _fallback_profile_record(profile_url)
                     else:
                         extracted_profile = extract_profile_record(
@@ -267,7 +270,7 @@ def run_x_profile_bundle_spider(
                 tweets_collected_ok = False
                 try:
                     if not profile_ready:
-                        raise RuntimeError("未能通过搜索页进入作者主页")
+                        raise RuntimeError("未能进入作者主页")
                     tweets = collect_profile_tweets(
                         page,
                         None,

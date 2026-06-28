@@ -8,8 +8,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.platforms.x_twitter.profile_tweets import (
     DEFAULT_PROFILE_TWEET_LIMIT,
     build_profile_search_url,
+    collect_profile_tweets,
     normalize_scroll_delay_range,
     run_x_profile_tweets_spider,
+    use_profile_search_entry,
 )
 from src.platforms.x_twitter.windows import XProfileTweetsWindow, _x_cdp_url, _x_config
 
@@ -37,6 +39,12 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertEqual(defaults["max_scrolls"], 80)
         self.assertEqual(defaults["scroll_interval_min"], 2.4)
         self.assertEqual(defaults["scroll_interval_max"], 5.6)
+        self.assertEqual(defaults["profile_entry_mode"], "直接打开")
+
+    def test_profile_entry_mode_defaults_to_direct(self):
+        self.assertFalse(use_profile_search_entry({}))
+        self.assertFalse(use_profile_search_entry({"profile_entry_mode": "直接打开"}))
+        self.assertTrue(use_profile_search_entry({"profile_entry_mode": "搜索页进入"}))
 
     def test_scroll_delay_range_supports_old_and_swapped_config(self):
         self.assertEqual(normalize_scroll_delay_range({"scroll_interval": 3.2}), (3.2, 3.2))
@@ -47,6 +55,69 @@ class TestXProfileTweetsLogic(unittest.TestCase):
             build_profile_search_url("DemoUser"),
             "https://x.com/search?q=%40DemoUser&src=typed_query&f=user",
         )
+
+    @patch("src.platforms.x_twitter.profile_tweets.interruptible_sleep", return_value=False)
+    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery")
+    @patch("src.platforms.x_twitter.profile_tweets.extract_visible_profile_tweets")
+    def test_recovery_is_not_triggered_when_tweets_are_visible(self, mock_extract, mock_recovery, mock_sleep):
+        page = MagicMock()
+        page.wait_for_selector.return_value = None
+        page.locator.return_value.all.return_value = []
+        page.evaluate.return_value = 1000
+        mock_extract.return_value = [
+            {
+                "postId": "1",
+                "publishedAt": "2026-06-01T00:00:00Z",
+                "content": "visible tweet",
+                "url": "https://x.com/demo/status/1",
+            }
+        ]
+
+        tweets = collect_profile_tweets(
+            page,
+            None,
+            "https://x.com/demo",
+            max_scrolls=1,
+            limit_time_bool=False,
+            start_dt=None,
+            end_dt=None,
+            get_comments_bool=False,
+            max_comments=0,
+            log_callback=None,
+            page_timeout=100,
+            page_already_loaded=True,
+            max_collect=1,
+        )
+
+        self.assertEqual(len(tweets), 1)
+        mock_recovery.assert_not_called()
+
+    @patch("src.platforms.x_twitter.profile_tweets.interruptible_sleep", return_value=False)
+    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery", return_value=True)
+    @patch("src.platforms.x_twitter.profile_tweets.extract_visible_profile_tweets", return_value=[])
+    def test_recovery_is_triggered_only_after_empty_tweet_extract(self, mock_extract, mock_recovery, mock_sleep):
+        page = MagicMock()
+        page.wait_for_selector.return_value = None
+        page.locator.return_value.all.return_value = []
+        page.evaluate.return_value = 1000
+
+        tweets = collect_profile_tweets(
+            page,
+            None,
+            "https://x.com/demo",
+            max_scrolls=1,
+            limit_time_bool=False,
+            start_dt=None,
+            end_dt=None,
+            get_comments_bool=False,
+            max_comments=0,
+            log_callback=None,
+            page_timeout=100,
+            page_already_loaded=True,
+        )
+
+        self.assertEqual(tweets, [])
+        mock_recovery.assert_called()
 
     def test_x_window_edge_browser_uses_separate_cdp_port(self):
         values = {"browser": "Edge", "max_scrolls": 12}
@@ -59,7 +130,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
     @patch("src.platforms.x_twitter.profile_tweets.extract_post_count")
-    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile_via_search")
+    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile")
     @patch("src.platforms.x_twitter.profile_tweets.collect_profile_tweets")
     def test_default_collects_latest_50_without_time_filter(
         self,
@@ -101,6 +172,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertIsNone(kwargs.get("keyword"))
         self.assertTrue(kwargs.get("page_already_loaded"))
         self.assertEqual(kwargs.get("max_collect"), DEFAULT_PROFILE_TWEET_LIMIT)
+        self.assertFalse(mock_navigate.call_args.kwargs.get("use_search_entry"))
         self.assertTrue(any("忽略时间窗口" in msg for msg in log_msgs))
         self.assertTrue(any("忽略补充关键词" in msg for msg in log_msgs))
         self.assertTrue(any("最新推文采集" in msg for msg in log_msgs))
@@ -109,7 +181,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
     @patch("src.platforms.x_twitter.profile_tweets.open_task_checkpoint", return_value=DummyCheckpoint())
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
-    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile_via_search")
+    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile")
     @patch("src.platforms.x_twitter.profile_tweets.collect_profile_tweets")
     def test_configured_latest_limit_and_scrolls(
         self,
@@ -144,6 +216,39 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertTrue(kwargs.get("page_already_loaded"))
         self.assertEqual(kwargs.get("max_collect"), 20)
         self.assertIsNone(kwargs.get("keyword"))
+
+    @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
+    @patch("src.platforms.x_twitter.profile_tweets.open_task_checkpoint", return_value=DummyCheckpoint())
+    @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
+    @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
+    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile")
+    @patch("src.platforms.x_twitter.profile_tweets.collect_profile_tweets")
+    def test_search_entry_mode_is_optional(
+        self,
+        mock_collect,
+        mock_navigate,
+        mock_sync_pw,
+        mock_connect,
+        mock_checkpoint,
+        mock_writer,
+    ):
+        mock_context = MagicMock()
+        mock_connect.return_value = (MagicMock(), mock_context)
+        mock_navigate.return_value = True
+        mock_collect.return_value = ([], 0, 5)
+
+        run_x_profile_tweets_spider(
+            profile_urls_text="https://x.com/user_search",
+            keywords_text="",
+            limit_time_str="否",
+            start_date="",
+            end_date="",
+            get_comments_str="否",
+            max_comments=100,
+            config={"profile_entry_mode": "搜索页进入"},
+        )
+
+        self.assertTrue(mock_navigate.call_args.kwargs.get("use_search_entry"))
 
 
 if __name__ == "__main__":

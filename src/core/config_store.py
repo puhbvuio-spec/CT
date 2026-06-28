@@ -167,6 +167,10 @@ DEFAULT_CONFIGS: dict[str, dict] = {
     "x_tweet_author_profiles": {
         "tweet_ready_timeout": 12000,
         "cooldown_every": 5,
+        "profile_entry_mode": "直接打开",
+    },
+    "x_keyword_author_works": {
+        "profile_entry_mode": "直接打开",
     },
     "x_paired_context_metrics": {
         "context_size": 5,
@@ -180,11 +184,13 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "max_tweets_per_author": 50,
         "max_scrolls": 80,
         "initial_load_delay": 2.0,
+        "profile_entry_mode": "直接打开",
     },
     "x_profile_bundle": {
         "max_tweets_per_author": 50,
         "max_scrolls": 80,
         "initial_load_delay": 2.0,
+        "profile_entry_mode": "直接打开",
     },
     "x_top_comments": {
     },

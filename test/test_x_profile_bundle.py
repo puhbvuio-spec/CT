@@ -54,6 +54,7 @@ def test_x_profile_bundle_defaults_and_discovery():
 
     assert defaults["max_tweets_per_author"] == 50
     assert defaults["max_scrolls"] == 80
+    assert defaults["profile_entry_mode"] == "直接打开"
 
     static_ids = {tool.tool_id for tool in TOOLS}
     assert "x_profile_bundle" in static_ids

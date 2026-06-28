@@ -40,8 +40,9 @@ from src.platforms.x_twitter.profile_tweets import (
     SCROLL_DELAY,
     SCROLL_PX,
     collect_profile_tweets,
-    navigate_to_profile_via_search,
+    navigate_to_profile,
     normalize_scroll_delay_range,
+    use_profile_search_entry,
 )
 from src.platforms.x_twitter.profiles import (
     extract_author_from_article,
@@ -388,6 +389,7 @@ def run_x_keyword_author_works_spider(
     search_refresh_count = int(config.get("search_refresh_count", 3))
     search_refresh_interval = float(config.get("search_refresh_interval", 5.0))
     browser_choice = config.get("browser")
+    search_entry_enabled = use_profile_search_entry(config)
 
     completed_path = None
     search_page = profile_page = works_page = None
@@ -462,7 +464,7 @@ def run_x_keyword_author_works_spider(
                     log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入作者主页：{seed.profile_url}")
-                profile_ready = navigate_to_profile_via_search(
+                profile_ready = navigate_to_profile(
                     profile_page,
                     seed.profile_url,
                     log_callback,
@@ -471,6 +473,7 @@ def run_x_keyword_author_works_spider(
                     pause_event=pause_event,
                     initial_delay=initial_load_delay,
                     recovery_config=config,
+                    use_search_entry=search_entry_enabled,
                 )
                 extracted_profile = (
                     extract_profile_record(
@@ -495,7 +498,7 @@ def run_x_keyword_author_works_spider(
                 }
                 works_collected_ok = False
                 try:
-                    if not navigate_to_profile_via_search(
+                    if not navigate_to_profile(
                         works_page,
                         profile_record.get("作者主页链接") or seed.profile_url,
                         log_callback,
@@ -504,8 +507,9 @@ def run_x_keyword_author_works_spider(
                         pause_event=pause_event,
                         initial_delay=initial_load_delay,
                         recovery_config=config,
+                        use_search_entry=search_entry_enabled,
                     ):
-                        raise RuntimeError("未能通过搜索页进入作者主页")
+                        raise RuntimeError("未能进入作者主页")
                     works = collect_profile_tweets(
                         works_page,
                         None,

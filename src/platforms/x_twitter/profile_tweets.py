@@ -157,24 +157,31 @@ def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=N
         if wait_if_paused(pause_event, stop_event):
             return False
         if _current_page_is_profile(page, username):
-            if not wait_for_x_page_recovery(
-                page,
-                log_callback=log_callback,
-                page_timeout=timeout_ms,
-                stop_event=stop_event,
-                pause_event=pause_event,
-                context_label=f"作者主页 @{username}",
-                recovery_config=recovery_config,
-            ):
-                return False
             try:
                 page.wait_for_selector(
                     'div[data-testid="UserName"], div[data-testid="UserDescription"], article[data-testid="tweet"], article',
                     timeout=3000,
                 )
+                return True
             except Exception:
-                pass
-            return True
+                if not wait_for_x_page_recovery(
+                    page,
+                    log_callback=log_callback,
+                    page_timeout=timeout_ms,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    context_label=f"作者主页 @{username}",
+                    recovery_config=recovery_config,
+                ):
+                    return False
+                try:
+                    page.wait_for_selector(
+                        'div[data-testid="UserName"], div[data-testid="UserDescription"], article[data-testid="tweet"], article',
+                        timeout=3000,
+                    )
+                    return True
+                except Exception:
+                    pass
         if interruptible_sleep(0.5, stop_event):
             return False
     return _current_page_is_profile(page, username)
@@ -194,6 +201,90 @@ def normalize_scroll_delay_range(config: dict | None, fallback: float = SCROLL_D
 
 def random_scroll_delay(min_delay: float, max_delay: float, extra: float = 0.0) -> float:
     return random.uniform(float(min_delay), float(max_delay)) + max(0.0, float(extra or 0.0))
+
+
+def use_profile_search_entry(config: dict | None) -> bool:
+    value = (config or {}).get("profile_entry_mode", "直接打开")
+    text = str(value or "").strip().lower()
+    return text in {"搜索页进入", "搜索进入", "search", "search_page", "search-page", "是", "true", "1", "yes"}
+
+
+def navigate_to_profile_direct(
+    page,
+    profile_url: str,
+    log_callback,
+    page_timeout=None,
+    stop_event=None,
+    pause_event=None,
+    initial_delay=None,
+    recovery_config=None,
+) -> bool:
+    """Open the profile URL directly and wait for the profile shell to stabilize."""
+    if page_timeout is None:
+        page_timeout = PAGE_LOAD_TIMEOUT
+    if initial_delay is None:
+        initial_delay = INITIAL_LOAD_DELAY
+
+    normalized_url = clean_profile_url(profile_url)
+    username = extract_profile_username(normalized_url)
+    if not username:
+        log_warn(log_callback, f"  无效的 X 博主主页链接：{profile_url}")
+        return False
+    if _current_page_is_profile(page, username):
+        return True
+
+    log_line(log_callback, f"  直接打开作者主页：@{username}")
+    try:
+        page.goto(normalized_url, wait_until="domcontentloaded", timeout=page_timeout)
+    except Exception as exc:
+        log_warn(log_callback, f"  作者主页直连加载异常，继续等待已加载内容：{exc}")
+    if interruptible_sleep(initial_delay, stop_event):
+        return False
+    if wait_if_paused(pause_event, stop_event):
+        return False
+    return _wait_until_profile_ready(
+        page,
+        username,
+        min(int(page_timeout), 20000),
+        stop_event=stop_event,
+        pause_event=pause_event,
+        log_callback=log_callback,
+        recovery_config=recovery_config,
+    )
+
+
+def navigate_to_profile(
+    page,
+    profile_url: str,
+    log_callback,
+    page_timeout=None,
+    stop_event=None,
+    pause_event=None,
+    initial_delay=None,
+    recovery_config=None,
+    use_search_entry: bool = False,
+) -> bool:
+    if use_search_entry:
+        return navigate_to_profile_via_search(
+            page,
+            profile_url,
+            log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            initial_delay=initial_delay,
+            recovery_config=recovery_config,
+        )
+    return navigate_to_profile_direct(
+        page,
+        profile_url,
+        log_callback,
+        page_timeout=page_timeout,
+        stop_event=stop_event,
+        pause_event=pause_event,
+        initial_delay=initial_delay,
+        recovery_config=recovery_config,
+    )
 
 
 def navigate_to_profile_via_search(
@@ -227,17 +318,6 @@ def navigate_to_profile_via_search(
     except Exception as exc:
         log_warn(log_callback, f"  搜索页加载异常，继续尝试读取已加载结果：{exc}")
 
-    if not wait_for_x_page_recovery(
-        page,
-        log_callback=log_callback,
-        page_timeout=page_timeout,
-        stop_event=stop_event,
-        pause_event=pause_event,
-        context_label="X 搜索页",
-        recovery_config=recovery_config,
-    ):
-        return False
-
     try:
         page.wait_for_selector('main, div[data-testid="primaryColumn"], a[href]', timeout=min(int(page_timeout), 10000))
     except Exception:
@@ -255,20 +335,19 @@ def navigate_to_profile_via_search(
             return False
         if wait_if_paused(pause_event, stop_event):
             return False
-        if not wait_for_x_page_recovery(
-            page,
-            log_callback=log_callback,
-            page_timeout=page_timeout,
-            stop_event=stop_event,
-            pause_event=pause_event,
-            context_label="X 搜索页",
-            recovery_config=recovery_config,
-        ):
-            return False
-
         remaining_ms = max(1000, int((search_deadline - time.monotonic()) * 1000))
         wait_ms = min(6000, remaining_ms)
         if not _wait_for_exact_profile_result(page, username, wait_ms):
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label="X 搜索页",
+                recovery_config=recovery_config,
+            ):
+                return False
             try:
                 page.keyboard.press("End")
             except Exception:
@@ -301,16 +380,6 @@ def navigate_to_profile_via_search(
         if attempt % 3 == 0:
             try:
                 page.reload(wait_until="domcontentloaded", timeout=page_timeout)
-                if not wait_for_x_page_recovery(
-                    page,
-                    log_callback=log_callback,
-                    page_timeout=page_timeout,
-                    stop_event=stop_event,
-                    pause_event=pause_event,
-                    context_label="X 搜索页",
-                    recovery_config=recovery_config,
-                ):
-                    return False
                 interruptible_sleep(max(1.0, float(initial_delay)), stop_event)
             except Exception:
                 pass
@@ -564,6 +633,7 @@ def collect_profile_tweets(
     date_window_size: int = 20,
     include_reposts: bool = True,
     recovery_config=None,
+    use_search_entry: bool = False,
 ) -> list[dict[str, str]] | tuple[list[dict[str, str]], int, int]:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
@@ -619,7 +689,7 @@ def collect_profile_tweets(
         if not page_already_loaded:
             if target_url:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=page_timeout)
-            elif not navigate_to_profile_via_search(
+            elif not navigate_to_profile(
                 page,
                 profile_url,
                 log_callback,
@@ -628,36 +698,39 @@ def collect_profile_tweets(
                 pause_event=pause_event,
                 initial_delay=initial_load_delay,
                 recovery_config=recovery_config,
+                use_search_entry=use_search_entry,
             ):
-                raise RuntimeError(f"未能通过搜索页进入作者主页：{profile_url}")
-            if not wait_for_x_page_recovery(
-                page,
-                log_callback=log_callback,
-                page_timeout=page_timeout,
-                stop_event=stop_event,
-                pause_event=pause_event,
-                context_label=f"作者主页 @{username}",
-                recovery_config=recovery_config,
-            ):
-                raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
-            page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
+                raise RuntimeError(f"未能进入作者主页：{profile_url}")
+            try:
+                page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
+            except PlaywrightTimeoutError:
+                if not wait_for_x_page_recovery(
+                    page,
+                    log_callback=log_callback,
+                    page_timeout=page_timeout,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    context_label=f"作者主页 @{username}",
+                    recovery_config=recovery_config,
+                ):
+                    raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
+                page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             interruptible_sleep(initial_load_delay, stop_event)
         else:
-            if not wait_for_x_page_recovery(
-                page,
-                log_callback=log_callback,
-                page_timeout=page_timeout,
-                stop_event=stop_event,
-                pause_event=pause_event,
-                context_label=f"作者主页 @{username}",
-                recovery_config=recovery_config,
-            ):
-                raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             # 页面已由调用方加载，只需等待渲染完成
             try:
                 page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             except PlaywrightTimeoutError:
-                pass
+                if not wait_for_x_page_recovery(
+                    page,
+                    log_callback=log_callback,
+                    page_timeout=page_timeout,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    context_label=f"作者主页 @{username}",
+                    recovery_config=recovery_config,
+                ):
+                    raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             interruptible_sleep(initial_load_delay, stop_event)
     except PlaywrightTimeoutError:
         if keyword:
@@ -677,17 +750,6 @@ def collect_profile_tweets(
             break
         if wait_if_paused(pause_event, stop_event):
             break
-        if not wait_for_x_page_recovery(
-            page,
-            log_callback=log_callback,
-            page_timeout=page_timeout,
-            stop_event=stop_event,
-            pause_event=pause_event,
-            context_label=f"作者主页 @{username}",
-            recovery_config=recovery_config,
-        ):
-            break
-
         for text_lbl in ['view original', '查看原文', '原文を表示', 'show original', '原文を見る', 'show more', 'show more...', 'もっと見る', '더 보기', '显示更多']:
             try:
                 locs = page.locator(f"article >> text='{text_lbl}'").all()
@@ -700,6 +762,18 @@ def collect_profile_tweets(
                 pass
             
         visible_tweets = extract_visible_profile_tweets(page, username)
+        if not visible_tweets:
+            if not wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label=f"作者主页 @{username}",
+                recovery_config=recovery_config,
+            ):
+                break
+            visible_tweets = extract_visible_profile_tweets(page, username)
         added = 0
         for tweet in visible_tweets:
             post_id = str(tweet.get("postId") or "")
@@ -922,6 +996,7 @@ def run_x_profile_tweets_spider(
     guarantee_min_scrolls_val = int(config.get("guarantee_min_scrolls", GUARANTEE_MIN_SCROLLS))
     date_window_size = int(config.get("date_window_size", 20))
     browser_choice = config.get("browser")
+    search_entry_enabled = use_profile_search_entry(config)
 
     completed_path = None
     page = None
@@ -998,7 +1073,7 @@ def run_x_profile_tweets_spider(
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 开始处理博主主页：{profile_url}")
                 
                 try:
-                    if not navigate_to_profile_via_search(
+                    if not navigate_to_profile(
                         page,
                         profile_url,
                         log_callback,
@@ -1007,8 +1082,9 @@ def run_x_profile_tweets_spider(
                         pause_event=pause_event,
                         initial_delay=initial_load_delay_val,
                         recovery_config=config,
+                        use_search_entry=search_entry_enabled,
                     ):
-                        log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{profile_url}")
+                        log_warn(log_callback, f"  跳过：未能进入作者主页：{profile_url}")
                         continue
                     if keyword_list:
                         log_line(log_callback, "  已忽略补充关键词：主页推文采集现在只取最新作品样本。")

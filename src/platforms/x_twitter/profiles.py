@@ -21,7 +21,7 @@ from src.core import (
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
-from src.platforms.x_twitter.profile_tweets import navigate_to_profile_via_search
+from src.platforms.x_twitter.profile_tweets import navigate_to_profile, use_profile_search_entry
 
 OUTPUT_FIELDS = ["推文链接", "作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
 OUTPUT_FIELDS_PROFILE_MODE = ["作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
@@ -455,6 +455,7 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
     cooldown_max = float(config.get("cooldown_max", 5.0))
     cooldown_every_val = int(config.get("cooldown_every", 5))
     browser_choice = config.get("browser")
+    search_entry_enabled = use_profile_search_entry(config)
 
     output_path = None
     try:
@@ -512,7 +513,7 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                 
                 if is_profile_mode:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理博主链接：{link}")
-                    if navigate_to_profile_via_search(
+                    if navigate_to_profile(
                         profile_page,
                         link,
                         log_callback,
@@ -521,10 +522,11 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                         pause_event=pause_event,
                         initial_delay=2.0,
                         recovery_config=config,
+                        use_search_entry=search_entry_enabled,
                     ):
                         record = extract_profile_record(profile_page, link, log_callback, page_timeout=page_load_timeout, stop_event=stop_event, needs_navigation=False, recovery_config=config)
                     else:
-                        log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{link}")
+                        log_warn(log_callback, f"  跳过：未能进入作者主页：{link}")
                         record = None
                 else:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理推文：{link}")
