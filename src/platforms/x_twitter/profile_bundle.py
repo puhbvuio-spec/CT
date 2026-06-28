@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+import re
+import time
+from datetime import datetime
+
+try:
+    from playwright.sync_api import sync_playwright
+except ModuleNotFoundError:  # pragma: no cover
+    sync_playwright = None
+
+from src.core import (
+    DEFAULT_X_CDP_URL,
+    MultiSheetXlsxWriter,
+    build_output_path,
+    connect_existing_chromium,
+    log_error,
+    log_line,
+    log_warn,
+    should_stop,
+    wait_if_paused,
+)
+from src.platforms.x_twitter.profile_tweets import (
+    DEFAULT_MAX_SCROLLS,
+    INITIAL_LOAD_DELAY,
+    NO_NEW_SCROLL_LIMIT,
+    PAGE_LOAD_TIMEOUT,
+    SCROLL_DELAY,
+    SCROLL_PX,
+    collect_profile_tweets,
+    extract_profile_username,
+    parse_profile_urls,
+    row_from_tweet,
+)
+from src.platforms.x_twitter.profiles import extract_profile_record, normalize_x_url
+
+
+PROFILE_FIELDS = ["作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
+TWEET_FIELDS = [
+    "序号",
+    "作者主页链接",
+    "作者名称",
+    "作者ID",
+    "粉丝数",
+    "作者简介",
+    "帖子ID",
+    "发布时间",
+    "帖子内容",
+    "浏览量",
+    "点赞量",
+    "转发量",
+    "评论数",
+    "帖子链接",
+]
+SUMMARY_FIELDS = [
+    "作者主页链接",
+    "作者名称",
+    "作者ID",
+    "粉丝数",
+    "作者简介",
+    "采集推文数",
+    "推文链接列表",
+    "推文发布时间列表",
+    "推文内容列表",
+]
+
+
+def _parse_date_range(start_date: str, end_date: str) -> tuple[datetime, datetime]:
+    start_dt = datetime.strptime(start_date.strip(), "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date.strip(), "%Y-%m-%d")
+    if start_dt > end_dt:
+        raise ValueError("开始日期不能晚于结束日期。")
+    return start_dt, end_dt
+
+
+def _cell_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _join_cell(values) -> str:
+    return "\n".join(_cell_text(value) for value in values if _cell_text(value))
+
+
+def _fallback_profile_record(profile_url: str) -> dict[str, str]:
+    normalized_url = normalize_x_url(profile_url)
+    username = extract_profile_username(normalized_url)
+    return {
+        "作者主页链接": normalized_url,
+        "作者的名称": "",
+        "账号ID": username,
+        "粉丝数": "",
+        "简介": "",
+    }
+
+
+def _enriched_tweet_row(index: int, profile_record: dict[str, str], tweet: dict[str, str]) -> dict[str, str]:
+    base = row_from_tweet(index, tweet)
+    return {
+        "序号": base.get("序号", str(index)),
+        "作者主页链接": profile_record.get("作者主页链接", ""),
+        "作者名称": profile_record.get("作者的名称", ""),
+        "作者ID": profile_record.get("账号ID", ""),
+        "粉丝数": profile_record.get("粉丝数", ""),
+        "作者简介": profile_record.get("简介", ""),
+        "帖子ID": base.get("帖子ID", ""),
+        "发布时间": base.get("发布时间", ""),
+        "帖子内容": base.get("帖子内容", ""),
+        "浏览量": base.get("浏览量", ""),
+        "点赞量": base.get("点赞量", ""),
+        "转发量": base.get("转发量", ""),
+        "评论数": base.get("评论数", ""),
+        "帖子链接": base.get("帖子链接", ""),
+    }
+
+
+def build_summary_row(profile_record: dict[str, str], tweets: list[dict[str, str]]) -> dict[str, str]:
+    return {
+        "作者主页链接": profile_record.get("作者主页链接", ""),
+        "作者名称": profile_record.get("作者的名称", ""),
+        "作者ID": profile_record.get("账号ID", ""),
+        "粉丝数": profile_record.get("粉丝数", ""),
+        "作者简介": profile_record.get("简介", ""),
+        "采集推文数": str(len(tweets)),
+        "推文链接列表": _join_cell(tweet.get("url", "") for tweet in tweets),
+        "推文发布时间列表": _join_cell(tweet.get("published_at", "") or tweet.get("publishedAt", "") for tweet in tweets),
+        "推文内容列表": _join_cell(tweet.get("content", "") for tweet in tweets),
+    }
+
+
+def run_x_profile_bundle_spider(
+    profile_urls_text: str,
+    limit_time_str: str,
+    start_date: str,
+    end_date: str,
+    cdp_port_or_url: str = DEFAULT_X_CDP_URL,
+    log_callback=None,
+    finish_callback=None,
+    stop_event=None,
+    config=None,
+    pause_event=None,
+):
+    if config is None:
+        config = {}
+    completed_path = None
+    page = None
+
+    try:
+        if sync_playwright is None:
+            log_error(log_callback, "缺少依赖：playwright。请先安装 requirements.txt 中的依赖。")
+            return
+
+        profile_urls = parse_profile_urls(profile_urls_text)
+        if not profile_urls:
+            log_warn(log_callback, "未读取到有效的 X 博主主页链接。")
+            return
+
+        page_timeout = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
+        scroll_delay = float(config.get("scroll_interval", SCROLL_DELAY))
+        no_new_scroll_limit = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
+        max_scrolls = int(config.get("max_scrolls", DEFAULT_MAX_SCROLLS))
+        max_tweets_per_author = int(config.get("max_tweets_per_author", 100))
+        scroll_px = int(config.get("scroll_px", SCROLL_PX))
+        initial_load_delay = float(config.get("initial_load_delay", INITIAL_LOAD_DELAY))
+        date_window_size = int(config.get("date_window_size", 20))
+        include_reposts = str(config.get("include_reposts", "否")).strip() == "是"
+
+        limit_time_bool = limit_time_str == "是"
+        start_dt = end_dt = None
+        if limit_time_bool:
+            start_dt, end_dt = _parse_date_range(start_date, end_date)
+
+        output_path = build_output_path(
+            "x",
+            f"x_profile_bundle_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+            channel="profile_bundle",
+        )
+        writer = MultiSheetXlsxWriter(
+            output_path,
+            {
+                "博主信息": PROFILE_FIELDS,
+                "推文信息": TWEET_FIELDS,
+                "作者推文聚合": SUMMARY_FIELDS,
+            },
+            autosave_every=10,
+        )
+
+        with sync_playwright() as playwright:
+            log_line(log_callback, "正在连接本地 Chrome...")
+            try:
+                _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+            except Exception as exc:
+                log_error(log_callback, f"无法连接浏览器：{exc}")
+                log_error(log_callback, "连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。")
+                return
+
+            page = context.new_page()
+            tweet_index = 0
+            total_profiles = len(profile_urls)
+
+            for profile_index, profile_url in enumerate(profile_urls, 1):
+                if should_stop(stop_event):
+                    log_line(log_callback, "任务已停止。")
+                    break
+                if wait_if_paused(pause_event, stop_event):
+                    break
+
+                profile_url = normalize_x_url(profile_url)
+                log_line(log_callback, f"[{profile_index}/{total_profiles}] 采集博主信息与推文：{profile_url}")
+
+                try:
+                    profile_record = extract_profile_record(
+                        page,
+                        profile_url,
+                        log_callback,
+                        page_timeout=page_timeout,
+                        stop_event=stop_event,
+                    ) or _fallback_profile_record(profile_url)
+                except Exception as exc:
+                    log_warn(log_callback, f"  博主信息采集失败，使用链接兜底：{exc}")
+                    profile_record = _fallback_profile_record(profile_url)
+
+                writer.writerow("博主信息", profile_record)
+
+                try:
+                    tweets = collect_profile_tweets(
+                        page,
+                        None,
+                        profile_record.get("作者主页链接") or profile_url,
+                        max_scrolls,
+                        limit_time_bool,
+                        start_dt,
+                        end_dt,
+                        False,
+                        0,
+                        log_callback,
+                        stop_event=stop_event,
+                        writer=None,
+                        page_timeout=page_timeout,
+                        scroll_delay=scroll_delay,
+                        no_new_scroll_limit=no_new_scroll_limit,
+                        pause_event=pause_event,
+                        max_collect=max_tweets_per_author,
+                        scroll_px=scroll_px,
+                        initial_load_delay=initial_load_delay,
+                        page_already_loaded=True,
+                        date_window_size=date_window_size,
+                        include_reposts=include_reposts,
+                    )
+                except Exception as exc:
+                    log_warn(log_callback, f"  推文采集失败：{exc}")
+                    tweets = []
+
+                for tweet in tweets:
+                    tweet_index += 1
+                    writer.writerow("推文信息", _enriched_tweet_row(tweet_index, profile_record, tweet))
+                writer.writerow("作者推文聚合", build_summary_row(profile_record, tweets))
+                writer.save()
+                log_line(
+                    log_callback,
+                    f"  完成：{profile_record.get('账号ID') or profile_url}，写入 {len(tweets)} 条推文。",
+                )
+
+        completed_path = output_path
+        writer.save()
+        log_line(log_callback, f"完成，已保存：{output_path}")
+    except Exception as exc:
+        log_error(log_callback, f"运行失败：{exc}")
+    finally:
+        try:
+            if page is not None and not page.is_closed():
+                page.close()
+        except Exception:
+            pass
+        if finish_callback:
+            finish_callback(completed_path)

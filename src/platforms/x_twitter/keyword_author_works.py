@@ -370,7 +370,7 @@ def run_x_keyword_author_works_spider(
             adv_params.get("end_date", ""),
         )
         if quick_mode_enabled(quick_mode_value):
-            log_line(log_callback, f"快速模式已开启：作者主页作品只取最新 {QUICK_PROFILE_WORK_LIMIT} 条。")
+            log_line(log_callback, f"快速模式已开启：作者主页作品最多取最新 {QUICK_PROFILE_WORK_LIMIT} 条，不足则采完即停。")
         ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
         with sync_playwright() as playwright:
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)

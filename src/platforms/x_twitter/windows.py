@@ -127,7 +127,7 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
                 FieldSpec("limit_time", "是否限制关键词命中时间？", kind="combo", options=("是", "否"), default="是"),
                 FieldSpec("start_date", "开始日期 YYYY-MM-DD", default=DEFAULT_START_DATE),
                 FieldSpec("end_date", "结束日期 YYYY-MM-DD", default=DEFAULT_END_DATE),
-                FieldSpec("quick_mode", "快速模式（作品只取最新50条）？", kind="combo", options=("是", "否"), default="是"),
+                FieldSpec("quick_mode", "快速模式（作品最多取最新50条）？", kind="combo", options=("是", "否"), default="是"),
             ],
             height=760,
         )
@@ -328,6 +328,67 @@ class XProfileTweetsWindow(SimpleToolWindow):
             int(values["max_comments"]),
             DEFAULT_X_CDP_URL,
             int(values.get("max_scrolls", 300)),
+            log_callback,
+            finish_callback,
+            stop_event,
+            config=config,
+            pause_event=pause_event,
+        )
+
+
+class XProfileBundleWindow(SimpleToolWindow):
+    tool_id = "x_profile_bundle"
+
+    def tool_config_params(self):
+        return [
+            ConfigParam("max_tweets_per_author", "每个作者最多采集推文数", kind="int", default=100, minimum=1, maximum=5000),
+            ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=5, maximum=2000),
+            ConfigParam("date_window_size", "时间窗口大小", kind="int", default=20, minimum=5, maximum=100,
+                        tooltip="限制时间时，最近 N 条帖子都不在时间窗口内则停止继续滚动。"),
+            ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("page_load_timeout", "页面加载超时(ms)", kind="int", default=30000, minimum=5000, maximum=120000, step=1000),
+            ConfigParam("scroll_interval", "滚动间隔(秒)", kind="float", default=3.2, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("scroll_px", "每次滚动像素", kind="int", default=2800, minimum=500, maximum=10000, step=100),
+            ConfigParam("no_new_scroll_limit", "连续无新增停止阈值", kind="int", default=10, minimum=3, maximum=50),
+        ]
+
+    def __init__(self) -> None:
+        super().__init__(
+            "X 博主信息+推文采集",
+            [
+                FieldSpec(
+                    "profile_urls",
+                    "博主主页链接，每行一个",
+                    kind="text_or_file",
+                    placeholder="https://x.com/username",
+                    required=True,
+                ),
+                FieldSpec("limit_time", "是否限制推文时间？", kind="combo", options=("是", "否"), default="否"),
+                FieldSpec("start_date", "开始日期 YYYY-MM-DD", default=DEFAULT_START_DATE),
+                FieldSpec("end_date", "结束日期 YYYY-MM-DD", default=DEFAULT_END_DATE),
+                FieldSpec("include_reposts", "是否包含转推/转发？", kind="combo", options=("是", "否"), default="否"),
+            ],
+            height=760,
+        )
+        self.bind_field_visibility("limit_time", "是", ["start_date", "end_date"])
+
+    def validate_values(self, values):
+        if not _lines(values["profile_urls"]):
+            raise ValueError("至少需要输入一个 X 博主主页链接。")
+        if values.get("limit_time") == "是":
+            if not values.get("start_date") or not values.get("end_date"):
+                raise ValueError("开始日期和结束日期不能为空。")
+
+    def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
+        from src.platforms.x_twitter.profile_bundle import run_x_profile_bundle_spider
+
+        config = {k: v for k, v in values.items() if k in ("max_tweets_per_author", "max_scrolls", "date_window_size", "initial_load_delay", "page_load_timeout", "scroll_interval", "scroll_px", "no_new_scroll_limit", "include_reposts")}
+        return run_x_profile_bundle_spider(
+            values["profile_urls"],
+            values["limit_time"],
+            values["start_date"],
+            values["end_date"],
+            DEFAULT_X_CDP_URL,
             log_callback,
             finish_callback,
             stop_event,

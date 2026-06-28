@@ -87,7 +87,7 @@ class TikTokKeywordAuthorWorksWindow(SimpleToolWindow):
                 FieldSpec("start_date", "开始日期 YYYY-MM-DD", default=DEFAULT_START_DATE),
                 FieldSpec("end_date", "结束日期 YYYY-MM-DD", default=DEFAULT_END_DATE),
                 FieldSpec("keywords", "关键词，每行一个", kind="text_or_file", required=True, placeholder="每行一个关键词"),
-                FieldSpec("quick_mode", "快速模式（作品只取最新50条）？", kind="combo", options=("是", "否"), default="是"),
+                FieldSpec("quick_mode", "快速模式（作品最多取最新50条）？", kind="combo", options=("是", "否"), default="是"),
             ],
             height=720,
         )

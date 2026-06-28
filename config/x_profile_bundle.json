@@ -1,0 +1,10 @@
+{
+  "max_tweets_per_author": 100,
+  "max_scrolls": 80,
+  "date_window_size": 20,
+  "initial_load_delay": 2.0,
+  "page_load_timeout": 30000,
+  "scroll_interval": 3.2,
+  "scroll_px": 2800,
+  "no_new_scroll_limit": 10
+}
