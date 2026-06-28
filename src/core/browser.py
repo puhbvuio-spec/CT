@@ -14,8 +14,8 @@ import os
 import subprocess
 import time
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 from src.core.app_logging import log_line
 
@@ -285,6 +285,32 @@ def _wait_for_initial_page(port_or_url: str | int, timeout: float = 8.0, log_cal
     return False
 
 
+def _open_cdp_page_target(port_or_url: str | int, url: str = "about:blank", timeout: float = 2.0) -> bool:
+    """Ask an existing CDP server to create a page target."""
+    cdp_url = build_cdp_url(port_or_url).rstrip("/")
+    new_target_url = f"{cdp_url}/json/new?{quote(url, safe=':/?#[]@!$&()*+,;=%')}"
+    for method in ("PUT", "GET"):
+        try:
+            request = Request(new_target_url, method=method)
+            with urlopen(request, timeout=timeout) as response:
+                if 200 <= response.status < 300:
+                    return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _ensure_cdp_page_target(port_or_url: str | int, log_callback=None, timeout: float = 5.0) -> bool:
+    """Return True when the CDP server has at least one usable page target."""
+    if _wait_for_initial_page(port_or_url, timeout=timeout, log_callback=None):
+        return True
+    log_line(log_callback, "CDP is alive but no browser window is available; opening a new blank page...")
+    if _open_cdp_page_target(port_or_url):
+        return _wait_for_initial_page(port_or_url, timeout=3.0, log_callback=log_callback)
+    log_line(log_callback, "Unable to create a new browser page through CDP; restarting the browser...")
+    return False
+
+
 def _is_port_occupied(port_or_url: str | int, timeout: float = 1.0) -> bool:
     """
     检测端口是否被占用（不管是否为 CDP 服务）。
@@ -403,11 +429,6 @@ def ensure_chrome_for_cdp(port_or_url: str | int, log_callback=None, wait_second
     Returns:
         bool: 本次调用是否主动拉起了浏览器（用于上层决定是否做额外预热）
     """
-    # 已有就绪的 CDP 服务时，仍确认初始页面存在，避免连接到刚启动但未完成初始化的实例
-    if is_cdp_available(port_or_url):
-        _wait_for_initial_page(port_or_url, timeout=5.0, log_callback=log_callback)
-        return False
-
     # 选定要启动/复用的浏览器类型（按用户偏好）
     if browser:
         resolved_browser = _resolve_browser_preference(browser)
@@ -416,6 +437,11 @@ def ensure_chrome_for_cdp(port_or_url: str | int, log_callback=None, wait_second
     else:
         resolved_browser = _get_configured_browser()
     browser_display = "Edge" if resolved_browser == BROWSER_EDGE else "Chrome"
+
+    if is_cdp_available(port_or_url):
+        if _ensure_cdp_page_target(port_or_url, log_callback=log_callback, timeout=5.0):
+            return False
+        _kill_chrome_on_port(port_or_url, log_callback, browser=resolved_browser)
 
     # 检测端口是否被非 CDP 模式的浏览器占用（返回 400）
     if _is_port_occupied(port_or_url):
@@ -430,11 +456,15 @@ def ensure_chrome_for_cdp(port_or_url: str | int, log_callback=None, wait_second
     while time.time() < deadline:
         if is_cdp_available(port_or_url):
             # DevTools HTTP 服务已就绪，再等待首个 page 目标出现，确保窗口初始化完成
-            if _wait_for_initial_page(port_or_url, timeout=10.0, log_callback=log_callback):
+            if _ensure_cdp_page_target(port_or_url, timeout=10.0, log_callback=log_callback):
                 # 首次拉起后给浏览器一段缓冲，让默认上下文与首启流程彻底稳定
                 log_line(log_callback, "浏览器已就绪，等待初始窗口稳定...")
                 time.sleep(2.5)
-            return launched
+                return launched
+            _kill_chrome_on_port(port_or_url, log_callback, browser=resolved_browser)
+            launch_chrome_for_cdp(port_or_url, browser=resolved_browser)
+            time.sleep(0.4)
+            continue
         # 如果端口仍被非 CDP 的进程占用，再次尝试关闭
         if _is_port_occupied(port_or_url):
             _kill_chrome_on_port(port_or_url, log_callback, browser=resolved_browser)
