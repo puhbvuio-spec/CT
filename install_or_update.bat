@@ -355,8 +355,11 @@ exit /b 0
 set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
 echo.
 echo Verifying runtime imports...
+pushd "%INSTALL_DIR%" || exit /b 1
 "%VENV_PY%" -c "import PyQt5, openpyxl, playwright; import src.studio.qt_app; print('Runtime import OK')"
-if errorlevel 1 (
+set "VERIFY_EXIT=%ERRORLEVEL%"
+popd
+if not "%VERIFY_EXIT%"=="0" (
     echo [ERROR] Runtime import check failed.
     exit /b 1
 )
