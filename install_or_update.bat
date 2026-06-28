@@ -296,9 +296,19 @@ if exist "%INSTALL_DIR%\main.py" (
 if exist "%INSTALL_DIR%" (
     dir /b "%INSTALL_DIR%" 2>nul | findstr /r "." >nul
     if not errorlevel 1 (
+        if not defined INSTALL_REDIRECTED (
+            echo.
+            echo [WARN] Selected directory exists, is not empty, and is not a git repository:
+            echo        "%INSTALL_DIR%"
+            echo        Installing into a child directory instead:
+            echo        "%INSTALL_DIR%\social-platform-scraper"
+            set "INSTALL_DIR=%INSTALL_DIR%\social-platform-scraper"
+            set "INSTALL_REDIRECTED=1"
+            goto prepare_source
+        )
         echo [ERROR] Target directory exists but is not empty and not a git repository:
         echo        "%INSTALL_DIR%"
-        echo        Set SCRAPER_INSTALL_DIR to another path, or clean this directory first.
+        echo        Choose another directory, or clean this directory first.
         exit /b 1
     )
 ) else (
