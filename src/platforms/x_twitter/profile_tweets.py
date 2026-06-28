@@ -872,6 +872,7 @@ def run_x_profile_tweets_spider(
                 "max_scrolls": max_scrolls,
             },
             log_callback=log_callback,
+            merge_on_keys=("profile_urls",),
         )
 
         max_comments_val = 0

@@ -166,19 +166,114 @@ class TaskCheckpoint:
                 return str(output_path)
         return None
 
+    def merge_compatible_siblings(self, list_keys: tuple[str, ...], keep_keys: tuple[str, ...] = ()) -> int:
+        if not list_keys:
+            return 0
+        merged_count = 0
+        changed = False
+        best_completed_count = self.completed_count()
+        best_output_paths: list[str] = []
+        paths = self.data.setdefault("output_paths", [])
+        if not isinstance(paths, list):
+            paths = []
+            self.data["output_paths"] = paths
+
+        for sibling_path in self.path.parent.glob("*.json"):
+            if sibling_path == self.path:
+                continue
+            try:
+                sibling = json.loads(sibling_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(sibling, dict):
+                continue
+            if not self._compatible_scope(sibling.get("scope", {}), list_keys, keep_keys):
+                continue
+
+            sibling_completed = sibling.get("completed", {})
+            if not isinstance(sibling_completed, dict):
+                continue
+            for key, entry in sibling_completed.items():
+                if key not in self.completed:
+                    self.completed[key] = entry
+                    merged_count += 1
+                    changed = True
+
+            sibling_paths = [str(path) for path in sibling.get("output_paths", []) if path]
+            for output_path in sibling_paths:
+                if output_path not in paths:
+                    paths.append(output_path)
+                    changed = True
+            if len(sibling_completed) > best_completed_count and sibling_paths:
+                best_completed_count = len(sibling_completed)
+                best_output_paths = sibling_paths
+
+        if best_output_paths:
+            ordered_paths = [path for path in paths if path not in best_output_paths] + best_output_paths
+            if ordered_paths != self.data.get("output_paths"):
+                self.data["output_paths"] = ordered_paths
+                changed = True
+        if changed:
+            self.save()
+        return merged_count
+
+    def _compatible_scope(self, other_scope: dict[str, Any], list_keys: tuple[str, ...], keep_keys: tuple[str, ...]) -> bool:
+        if not isinstance(other_scope, dict):
+            return False
+        matched_list = False
+        for key in list_keys:
+            current_value = self.scope.get(key)
+            other_value = other_scope.get(key)
+            if isinstance(current_value, list) and isinstance(other_value, list):
+                if current_value != other_value:
+                    return False
+                matched_list = True
+        if not matched_list:
+            return False
+        for key in keep_keys:
+            if key in self.scope and key in other_scope and self.scope.get(key) != other_scope.get(key):
+                return False
+        return True
+
     def save(self) -> None:
         self.data["updated_at"] = _now()
         _atomic_write(self.path, self.data)
 
 
-def open_task_checkpoint(tool_id: str, scope: dict[str, Any], log_callback=None) -> TaskCheckpoint:
+def open_task_checkpoint(
+    tool_id: str,
+    scope: dict[str, Any],
+    log_callback=None,
+    merge_on_keys: tuple[str, ...] = (),
+    merge_keep_keys: tuple[str, ...] = (),
+) -> TaskCheckpoint:
     checkpoint = TaskCheckpoint(tool_id, scope)
+    merged_count = checkpoint.merge_compatible_siblings(merge_on_keys, merge_keep_keys) if merge_on_keys else 0
     if checkpoint.completed_count():
         try:
-            log_callback(f"断点续跑：已加载 {checkpoint.completed_count()} 条历史断点记录，将按成功状态自动判断是否跳过。")
+            scope_note = _scope_count_note(checkpoint.scope)
+            log_callback(
+                f"断点续跑：本次输入{scope_note}，已加载 {checkpoint.completed_count()} 条历史断点记录；"
+                "只会跳过确认成功的项。"
+            )
+            if merged_count:
+                log_callback(f"断点续跑：已从旧参数任务合并 {merged_count} 条历史记录。")
         except Exception:
             pass
     return checkpoint
+
+
+def _scope_count_note(scope: dict[str, Any]) -> str:
+    labels = (
+        ("profile_urls", "博主链接"),
+        ("links", "链接"),
+        ("keywords", "关键词"),
+    )
+    for key, label in labels:
+        value = scope.get(key) if isinstance(scope, dict) else None
+        if isinstance(value, list):
+            return f" {len(value)} 条{label}"
+    return ""
 
 
 def open_checkpointed_row_writer(

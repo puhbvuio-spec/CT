@@ -183,6 +183,8 @@ def run_x_profile_bundle_spider(
                 "include_reposts": include_reposts,
             },
             log_callback=log_callback,
+            merge_on_keys=("profile_urls",),
+            merge_keep_keys=("include_reposts",),
         )
 
         default_output_path = build_output_path(

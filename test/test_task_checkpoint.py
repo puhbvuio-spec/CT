@@ -56,6 +56,39 @@ class TestTaskCheckpoint(unittest.TestCase):
                 reloaded.mark_completed("A", {"tweet_count": 0})
                 self.assertTrue(reloaded.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
 
+    def test_checkpoint_log_mentions_input_count_and_history_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+                checkpoint = open_task_checkpoint("tool_log", {"profile_urls": ["A", "B"]})
+                checkpoint.mark_completed("A", {"profile_ok": 1})
+
+                messages = []
+                open_task_checkpoint("tool_log", {"profile_urls": ["A", "B"]}, log_callback=messages.append)
+
+                self.assertIn("本次输入 2 条博主链接", messages[0])
+                self.assertIn("已加载 1 条历史断点记录", messages[0])
+
+    def test_checkpoint_can_merge_same_input_with_different_runtime_limits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+                old_checkpoint = open_task_checkpoint("tool_merge", {"profile_urls": ["A", "B"], "max_scrolls": 50})
+                old_output_path = Path(tmp) / "old.xlsx"
+                old_output_path.touch()
+                old_checkpoint.add_output_path(str(old_output_path))
+                old_checkpoint.mark_completed("A", {"tweet_count": 3})
+
+                messages = []
+                new_checkpoint = open_task_checkpoint(
+                    "tool_merge",
+                    {"profile_urls": ["A", "B"], "max_scrolls": 10},
+                    log_callback=messages.append,
+                    merge_on_keys=("profile_urls",),
+                )
+
+                self.assertTrue(new_checkpoint.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
+                self.assertIn("已从旧参数任务合并 1 条历史记录", "\n".join(messages))
+                self.assertEqual(new_checkpoint.latest_output_path(), str(old_output_path))
+
     def test_xlsx_row_writer_can_append_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "rows.xlsx"
