@@ -22,7 +22,7 @@ if not exist "%PY%" (
     )
     if exist "%~dp0install_or_update.bat" (
         echo Python venv not found. Running installer first...
-        call "%~dp0install_or_update.bat" --no-start --no-pause
+        call "%~dp0install_or_update.bat" --dir "%~dp0" --no-start --no-pause
         if errorlevel 1 (
             echo.
             echo [ERROR] Installer failed.

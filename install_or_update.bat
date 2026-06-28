@@ -5,6 +5,7 @@ chcp 65001 >nul
 rem One-click installer/updater for Social Platform Scraper.
 rem Usage:
 rem   install_or_update.bat
+rem   install_or_update.bat --dir D:\tools\social-platform-scraper
 rem   install_or_update.bat --no-start
 rem   install_or_update.bat --check-only
 rem Optional:
@@ -19,9 +20,30 @@ if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "NO_START=0"
 set "CHECK_ONLY=0"
 set "NO_PAUSE=0"
+set "ARG_INSTALL_DIR="
 
 :parse_args
 if "%~1"=="" goto args_done
+if /I "%~1"=="--dir" (
+    if "%~2"=="" (
+        echo [ERROR] --dir requires a directory path.
+        exit /b 1
+    )
+    set "ARG_INSTALL_DIR=%~2"
+    shift
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--install-dir" (
+    if "%~2"=="" (
+        echo [ERROR] --install-dir requires a directory path.
+        exit /b 1
+    )
+    set "ARG_INSTALL_DIR=%~2"
+    shift
+    shift
+    goto parse_args
+)
 if /I "%~1"=="--no-start" set "NO_START=1"
 if /I "%~1"=="--check-only" set "CHECK_ONLY=1"
 if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
@@ -31,19 +53,7 @@ shift
 goto parse_args
 
 :args_done
-if defined SCRAPER_INSTALL_DIR (
-    set "INSTALL_DIR=%SCRAPER_INSTALL_DIR%"
-) else (
-    if exist "%SCRIPT_DIR%\main.py" (
-        if exist "%SCRIPT_DIR%\requirements.txt" (
-            set "INSTALL_DIR=%SCRIPT_DIR%"
-        ) else (
-            set "INSTALL_DIR=%DEFAULT_DIR%"
-        )
-    ) else (
-        set "INSTALL_DIR=%DEFAULT_DIR%"
-    )
-)
+call :choose_install_dir || goto failed
 
 echo.
 echo ============================================================
@@ -94,12 +104,70 @@ goto success
 echo.
 echo Usage:
 echo   install_or_update.bat              Install/update, then start the app
+echo   install_or_update.bat --dir PATH   Install/update to PATH without prompting
 echo   install_or_update.bat --no-start   Install/update only
 echo   install_or_update.bat --check-only Check Git, Python, browser only
 echo.
 echo Optional environment variable:
 echo   SCRAPER_INSTALL_DIR=D:\tools\social-platform-scraper
 echo.
+exit /b 0
+
+:detect_suggested_dir
+if exist "%SCRIPT_DIR%\main.py" (
+    if exist "%SCRIPT_DIR%\requirements.txt" (
+        set "SUGGESTED_DIR=%SCRIPT_DIR%"
+        exit /b 0
+    )
+)
+set "SUGGESTED_DIR=%DEFAULT_DIR%"
+exit /b 0
+
+:choose_install_dir
+call :detect_suggested_dir
+
+if defined ARG_INSTALL_DIR (
+    set "INSTALL_DIR=!ARG_INSTALL_DIR!"
+    for %%I in ("!INSTALL_DIR!") do set "INSTALL_DIR=%%~fI"
+    exit /b 0
+)
+
+if defined SCRAPER_INSTALL_DIR (
+    set "INSTALL_DIR=!SCRAPER_INSTALL_DIR!"
+    for %%I in ("!INSTALL_DIR!") do set "INSTALL_DIR=%%~fI"
+    exit /b 0
+)
+
+if "%CHECK_ONLY%"=="1" (
+    set "INSTALL_DIR=!SUGGESTED_DIR!"
+    for %%I in ("!INSTALL_DIR!") do set "INSTALL_DIR=%%~fI"
+    exit /b 0
+)
+
+echo.
+echo Choose install/update directory.
+echo Suggested: "%SUGGESTED_DIR%"
+echo.
+echo   - Type or paste a target directory path.
+echo   - Type B to open a folder picker.
+echo   - Press Enter to use the suggested directory.
+echo.
+set "INSTALL_DIR="
+set /p "INSTALL_DIR=Install directory: "
+if /I "!INSTALL_DIR!"=="B" call :browse_install_dir
+if not defined INSTALL_DIR set "INSTALL_DIR=!SUGGESTED_DIR!"
+for %%I in ("!INSTALL_DIR!") do set "INSTALL_DIR=%%~fI"
+exit /b 0
+
+:browse_install_dir
+set "PICKED_DIR="
+for /f "usebackq delims=" %%D in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$shell = New-Object -ComObject Shell.Application; $folder = $shell.BrowseForFolder(0, 'Choose the install/update directory for Social Platform Scraper', 0, '%SUGGESTED_DIR%'); if ($folder) { $folder.Self.Path }"`) do set "PICKED_DIR=%%D"
+if defined PICKED_DIR (
+    set "INSTALL_DIR=%PICKED_DIR%"
+) else (
+    echo [WARN] Folder picker was cancelled. Using suggested directory.
+    set "INSTALL_DIR=%SUGGESTED_DIR%"
+)
 exit /b 0
 
 :require_git
