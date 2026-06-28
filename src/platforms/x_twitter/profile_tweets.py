@@ -750,6 +750,7 @@ def run_x_profile_tweets_spider(
     consecutive_date_limit_val = int(config.get("consecutive_date_limit", DEFAULT_CONSECUTIVE_DATE_LIMIT))
     guarantee_min_scrolls_val = int(config.get("guarantee_min_scrolls", GUARANTEE_MIN_SCROLLS))
     date_window_size = int(config.get("date_window_size", 20))
+    browser_choice = config.get("browser")
 
     completed_path = None
     page = None
@@ -777,12 +778,12 @@ def run_x_profile_tweets_spider(
         row_offset = 0
 
         with sync_playwright() as playwright:
-            log_line(log_callback, "正在连接本地 Chrome...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+                _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
             except Exception as exc:
                 log_error(log_callback, f"无法连接浏览器：{exc}")
-                log_error(log_callback, "连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。")
+                log_error(log_callback, "连接失败：请确认浏览器已自动打开并已登录 X/Twitter。")
                 return
 
             page = context.new_page()

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # 默认 CDP 调试接口地址
 DEFAULT_X_CDP_URL = "http://localhost:9222"
 DEFAULT_TIKTOK_CDP_URL = "http://localhost:9222"
+DEFAULT_EDGE_CDP_URL = "http://localhost:9223"
 
 # 浏览器类型标识
 BROWSER_AUTO = "auto"
@@ -112,6 +113,19 @@ def debug_port_from_cdp_url(port_or_url: str | int) -> str:
     if parsed.port is not None:
         return str(parsed.port)
     return parsed.netloc or cdp_url
+
+
+def cdp_url_for_browser(browser: str | None = None, default_url: str = DEFAULT_X_CDP_URL) -> str:
+    """
+    根据浏览器偏好返回推荐 CDP 地址。
+
+    Chrome 沿用 9222；Edge 使用 9223，避免误连到已经触发风控的 Chrome 会话。
+    browser 为 None/auto 时读取全局配置。
+    """
+    resolved_browser = _resolve_browser_preference(browser) if browser else _get_configured_browser()
+    if resolved_browser == BROWSER_EDGE:
+        return DEFAULT_EDGE_CDP_URL
+    return default_url
 
 
 def get_workspace_root():
@@ -395,7 +409,12 @@ def ensure_chrome_for_cdp(port_or_url: str | int, log_callback=None, wait_second
         return False
 
     # 选定要启动/复用的浏览器类型（按用户偏好）
-    resolved_browser = _resolve_browser_preference(browser) if browser else _get_configured_browser()
+    if browser:
+        resolved_browser = _resolve_browser_preference(browser)
+    elif debug_port_from_cdp_url(port_or_url) == debug_port_from_cdp_url(DEFAULT_EDGE_CDP_URL):
+        resolved_browser = BROWSER_EDGE
+    else:
+        resolved_browser = _get_configured_browser()
     browser_display = "Edge" if resolved_browser == BROWSER_EDGE else "Chrome"
 
     # 检测端口是否被非 CDP 模式的浏览器占用（返回 400）
@@ -463,6 +482,7 @@ def connect_existing_chromium(
     context_index: int = 0,
     log_callback=None,
     warmup: bool = True,
+    browser: str | None = None,
 ):
     """
     拉起（或确认）浏览器调试端口后，通过 Playwright 连接已有的 Chromium 实例。
@@ -478,7 +498,7 @@ def connect_existing_chromium(
     Returns:
         (browser, context): Playwright 的 browser 和 context 实例
     """
-    launched = ensure_chrome_for_cdp(port_or_url, log_callback=log_callback)
+    launched = ensure_chrome_for_cdp(port_or_url, log_callback=log_callback, browser=browser)
     cdp_url = build_cdp_url(port_or_url)
     browser = playwright.chromium.connect_over_cdp(cdp_url)
 

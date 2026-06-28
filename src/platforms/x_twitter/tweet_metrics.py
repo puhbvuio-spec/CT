@@ -235,7 +235,7 @@ def collect_tweet_metrics(page, tweet_url: str, page_timeout=None, page_ready_wa
     current_url = page.url
     if "login" in current_url.lower() or "account" in current_url.lower():
         log_warn(log_callback, f"  警告：当前页面疑似登录页：{current_url}")
-        raise RuntimeError("页面跳转到登录页，请确认 Chrome 已登录 X/Twitter")
+        raise RuntimeError("页面跳转到登录页，请确认当前浏览器已登录 X/Twitter")
 
     article = find_target_article(page, status_id, page_timeout=page_timeout)
     if article is None:
@@ -274,6 +274,7 @@ def run_x_tweet_metrics_spider(
     cooldown_every_val = int(config.get("cooldown_every", COOLDOWN_EVERY))
     cooldown_min_val = float(config.get("cooldown_min", COOLDOWN_MIN_SECONDS))
     cooldown_max_val = float(config.get("cooldown_max", COOLDOWN_MAX_SECONDS))
+    browser_choice = config.get("browser")
 
     completed_path = None
     page = None
@@ -298,12 +299,12 @@ def run_x_tweet_metrics_spider(
             writer = XlsxRowWriter(output_path, CSV_FIELDS, autosave_every=20)
 
         with sync_playwright() as playwright:
-            log_line(log_callback, "正在连接本地 Chrome...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+                _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
             except Exception as exc:
                 log_error(log_callback, f"无法连接浏览器：{exc}")
-                log_error(log_callback, "连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。")
+                log_error(log_callback, "连接失败：请确认浏览器已自动打开并已登录 X/Twitter。")
                 return
 
             page = context.new_page()

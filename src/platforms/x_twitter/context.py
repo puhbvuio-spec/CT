@@ -598,6 +598,7 @@ def run_scraper(txt_path: str, cdp_port_or_url: str, log_callback, finish_callba
     max_profile_scrolls_val = int(config.get("max_profile_scrolls", MAX_PROFILE_SCROLLS))
     profile_scroll_pause_val = float(config.get("scroll_interval", PROFILE_SCROLL_PAUSE))
     page_load_timeout_val = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
+    browser_choice = config.get("browser")
 
     output_path = None
     completed_path = None
@@ -611,11 +612,11 @@ def run_scraper(txt_path: str, cdp_port_or_url: str, log_callback, finish_callba
         writer = XlsxRowWriter(output_path, OUTPUT_FIELDS)
 
         with sync_playwright() as p:
-            log_line(log_callback, "正在连接本地 Chrome...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(p, cdp_port_or_url)
+                _, context = connect_existing_chromium(p, cdp_port_or_url, browser=browser_choice)
             except Exception as e:
-                log_error(log_callback, f"连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。错误：{e}")
+                log_error(log_callback, f"连接失败：请确认浏览器已自动打开并已登录 X/Twitter。错误：{e}")
                 return
 
             page = context.new_page()

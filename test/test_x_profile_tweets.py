@@ -10,7 +10,7 @@ from src.platforms.x_twitter.profile_tweets import (
     build_profile_search_url,
     run_x_profile_tweets_spider,
 )
-from src.platforms.x_twitter.windows import XProfileTweetsWindow
+from src.platforms.x_twitter.windows import XProfileTweetsWindow, _x_cdp_url, _x_config
 
 
 class TestXProfileTweetsLogic(unittest.TestCase):
@@ -26,6 +26,12 @@ class TestXProfileTweetsLogic(unittest.TestCase):
             build_profile_search_url("DemoUser"),
             "https://x.com/search?q=%40DemoUser&src=typed_query&f=user",
         )
+
+    def test_x_window_edge_browser_uses_separate_cdp_port(self):
+        values = {"browser": "Edge", "max_scrolls": 12}
+
+        self.assertEqual(_x_cdp_url(values), "http://localhost:9223")
+        self.assertEqual(_x_config(values, ("max_scrolls",)), {"max_scrolls": 12, "browser": "edge"})
 
     @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")

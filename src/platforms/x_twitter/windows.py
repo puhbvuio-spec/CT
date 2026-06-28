@@ -1,16 +1,49 @@
 from __future__ import annotations
 
-from src.core import DEFAULT_X_CDP_URL, debug_port_from_cdp_url
+from src.core import DEFAULT_X_CDP_URL, cdp_url_for_browser, debug_port_from_cdp_url
 from src.ui.base import FieldSpec, SimpleToolWindow
 from src.ui.config_dialog import ConfigParam
 
 
 DEFAULT_START_DATE = "2025-05-06"
 DEFAULT_END_DATE = "2026-05-06"
+BROWSER_OPTIONS = ("全局设置", "Chrome", "Edge")
 
 
 def _lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+def _browser_config_param() -> ConfigParam:
+    return ConfigParam(
+        "browser",
+        "浏览器",
+        kind="combo",
+        default="全局设置",
+        options=BROWSER_OPTIONS,
+        tooltip="Chrome 走 9222；Edge 走 9223 和独立 user_data_edge，适合 Chrome 被 X 风控时切换。",
+    )
+
+
+def _browser_value(values) -> str | None:
+    value = str(values.get("browser", "全局设置")).strip().lower()
+    if value == "edge":
+        return "edge"
+    if value == "chrome":
+        return "chrome"
+    return None
+
+
+def _x_cdp_url(values) -> str:
+    return cdp_url_for_browser(_browser_value(values), DEFAULT_X_CDP_URL)
+
+
+def _x_config(values, keys):
+    config = {k: v for k, v in values.items() if k in keys}
+    browser = _browser_value(values)
+    if browser:
+        config["browser"] = browser
+    return config
 
 
 class XKeywordWindow(SimpleToolWindow):
@@ -18,6 +51,7 @@ class XKeywordWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("max_parallel_tabs", "关键词爬取并行tab数", kind="int", default=1, minimum=1, maximum=3,
                         tooltip="同时处理几个关键词。1=顺序处理。最大3。"),
             ConfigParam("max_comment_tabs", "评论爬取并行tab数", kind="int", default=1, minimum=1, maximum=3,
@@ -92,8 +126,8 @@ class XKeywordWindow(SimpleToolWindow):
             "get_comments": values["get_comments"],
             "max_comments": int(values["max_comments"]),
         }
-        config = {k: v for k, v in values.items() if k in ("slice_days", "search_page_timeout", "cooldown_min", "cooldown_max", "no_new_scroll_limit", "comment_no_new_scroll_limit", "max_scrolls", "max_parallel_tabs", "max_comment_tabs", "max_queue_size", "search_refresh_count", "search_refresh_interval", "comment_refresh_count", "comment_refresh_interval", "empty_retry_rounds", "empty_retry_cooldown_min", "empty_retry_cooldown_max")}
-        return run_x_spider(_lines(values["keywords"]), adv_params, debug_port_from_cdp_url(DEFAULT_X_CDP_URL), log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
+        config = _x_config(values, ("slice_days", "search_page_timeout", "cooldown_min", "cooldown_max", "no_new_scroll_limit", "comment_no_new_scroll_limit", "max_scrolls", "max_parallel_tabs", "max_comment_tabs", "max_queue_size", "search_refresh_count", "search_refresh_interval", "comment_refresh_count", "comment_refresh_interval", "empty_retry_rounds", "empty_retry_cooldown_min", "empty_retry_cooldown_max"))
+        return run_x_spider(_lines(values["keywords"]), adv_params, debug_port_from_cdp_url(_x_cdp_url(values)), log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
 
 
 class XKeywordAuthorWorksWindow(SimpleToolWindow):
@@ -101,6 +135,7 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("max_seed_works", "关键词入口最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
             ConfigParam("max_authors", "最多进入作者主页数", kind="int", default=100, minimum=1, maximum=1000),
             ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
@@ -161,11 +196,11 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
             "end_date": values["end_date"],
             "quick_mode": values.get("quick_mode", "是"),
         }
-        config = {k: v for k, v in values.items() if k in ("max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "slice_days", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "search_refresh_count", "search_refresh_interval", "scroll_px", "initial_load_delay")}
+        config = _x_config(values, ("max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "slice_days", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "search_refresh_count", "search_refresh_interval", "scroll_px", "initial_load_delay"))
         return run_x_keyword_author_works_spider(
             _lines(values["keywords"]),
             adv_params,
-            debug_port_from_cdp_url(DEFAULT_X_CDP_URL),
+            debug_port_from_cdp_url(_x_cdp_url(values)),
             log_callback,
             finish_callback,
             stop_event,
@@ -179,6 +214,7 @@ class XProfilesWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("tweet_ready_timeout", "推文渲染等待(毫秒)", kind="int", default=12000, minimum=3000, maximum=60000, step=1000),
             ConfigParam("cooldown_every", "冷却间隔(个)", kind="int", default=5, minimum=1, maximum=50),
         ]
@@ -201,11 +237,11 @@ class XProfilesWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.profiles import run_scraper
 
-        config = {k: v for k, v in values.items() if k in ("page_load_timeout", "tweet_ready_timeout", "cooldown_min", "cooldown_max", "cooldown_every")}
+        config = _x_config(values, ("page_load_timeout", "tweet_ready_timeout", "cooldown_min", "cooldown_max", "cooldown_every"))
         return run_scraper(
             self._text_to_tempfile(values["txt_path"]),
             values["input_mode"],
-            DEFAULT_X_CDP_URL,
+            _x_cdp_url(values),
             log_callback,
             finish_callback,
             stop_event,
@@ -219,6 +255,7 @@ class XContextWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("context_size", "目标推文前后各取几条", kind="int", default=5, minimum=1, maximum=20),
             ConfigParam("max_profile_scrolls", "主页最大滚动次数", kind="int", default=45, minimum=5, maximum=300),
         ]
@@ -232,8 +269,8 @@ class XContextWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.context import run_scraper
 
-        config = {k: v for k, v in values.items() if k in ("context_size", "max_profile_scrolls", "scroll_interval", "page_load_timeout")}
-        return run_scraper(self._text_to_tempfile(values["txt_path"]), DEFAULT_X_CDP_URL, log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
+        config = _x_config(values, ("context_size", "max_profile_scrolls", "scroll_interval", "page_load_timeout"))
+        return run_scraper(self._text_to_tempfile(values["txt_path"]), _x_cdp_url(values), log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
 
 
 class XTweetMetricsWindow(SimpleToolWindow):
@@ -241,6 +278,7 @@ class XTweetMetricsWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("page_ready_wait", "页面就绪等待(秒)", kind="float", default=2.5, minimum=0.5, maximum=15.0, step=0.1, decimals=1,
                         tooltip="goto 后等待 React 渲染推文的缓冲时间。网络慢或经常未找到 DOM 可调大。"),
             ConfigParam("cooldown_every", "冷却间隔(条)", kind="int", default=3, minimum=1, maximum=50),
@@ -260,8 +298,8 @@ class XTweetMetricsWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.tweet_metrics import run_x_tweet_metrics_spider
 
-        config = {k: v for k, v in values.items() if k in ("page_load_timeout", "page_ready_wait", "comment_top_limit", "cooldown_every", "cooldown_min", "cooldown_max")}
-        return run_x_tweet_metrics_spider(self._text_to_tempfile(values["txt_path"]), values["get_comments"], int(values["max_comments"]), DEFAULT_X_CDP_URL, log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
+        config = _x_config(values, ("page_load_timeout", "page_ready_wait", "comment_top_limit", "cooldown_every", "cooldown_min", "cooldown_max"))
+        return run_x_tweet_metrics_spider(self._text_to_tempfile(values["txt_path"]), values["get_comments"], int(values["max_comments"]), _x_cdp_url(values), log_callback, finish_callback, stop_event, config=config, pause_event=pause_event)
 
 
 class XProfileTweetsWindow(SimpleToolWindow):
@@ -269,6 +307,7 @@ class XProfileTweetsWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("max_tweets_per_author", "每个博主最新推文数", kind="int", default=50, minimum=1, maximum=5000),
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
@@ -304,7 +343,7 @@ class XProfileTweetsWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.profile_tweets import run_x_profile_tweets_spider
 
-        config = {k: v for k, v in values.items() if k in ("max_tweets_per_author", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "max_scrolls", "save_batch_size", "cooldown_min", "cooldown_max", "scroll_px", "initial_load_delay")}
+        config = _x_config(values, ("max_tweets_per_author", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "max_scrolls", "save_batch_size", "cooldown_min", "cooldown_max", "scroll_px", "initial_load_delay"))
         return run_x_profile_tweets_spider(
             values["profile_urls"],
             values.get("keywords", ""),
@@ -313,7 +352,7 @@ class XProfileTweetsWindow(SimpleToolWindow):
             DEFAULT_END_DATE,
             "否",
             0,
-            DEFAULT_X_CDP_URL,
+            _x_cdp_url(values),
             int(values.get("max_scrolls", 300)),
             log_callback,
             finish_callback,
@@ -328,6 +367,7 @@ class XProfileBundleWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _browser_config_param(),
             ConfigParam("max_tweets_per_author", "每个作者最新推文数", kind="int", default=50, minimum=1, maximum=5000),
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
@@ -360,13 +400,13 @@ class XProfileBundleWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.profile_bundle import run_x_profile_bundle_spider
 
-        config = {k: v for k, v in values.items() if k in ("max_tweets_per_author", "max_scrolls", "initial_load_delay", "page_load_timeout", "scroll_interval", "scroll_px", "no_new_scroll_limit", "include_reposts")}
+        config = _x_config(values, ("max_tweets_per_author", "max_scrolls", "initial_load_delay", "page_load_timeout", "scroll_interval", "scroll_px", "no_new_scroll_limit", "include_reposts"))
         return run_x_profile_bundle_spider(
             values["profile_urls"],
             "否",
             DEFAULT_START_DATE,
             DEFAULT_END_DATE,
-            DEFAULT_X_CDP_URL,
+            _x_cdp_url(values),
             log_callback,
             finish_callback,
             stop_event,
@@ -383,7 +423,7 @@ class XCommentsWindow(SimpleToolWindow):
     tool_id = "x_top_comments"
 
     def tool_config_params(self):
-        return []
+        return [_browser_config_param()]
 
     def __init__(self) -> None:
         super().__init__(
@@ -410,10 +450,10 @@ class XCommentsWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.comments import run_x_top_comments_spider
 
-        config = {k: v for k, v in values.items() if k in ("page_load_timeout", "comment_top_limit", "scroll_interval", "no_new_scroll_limit")}
+        config = _x_config(values, ("page_load_timeout", "comment_top_limit", "scroll_interval", "no_new_scroll_limit"))
         return run_x_top_comments_spider(
             self._text_to_tempfile(values["txt_path"]),
-            DEFAULT_X_CDP_URL,
+            _x_cdp_url(values),
             int(values["max_scan_comments"]),
             log_callback,
             finish_callback,

@@ -86,7 +86,7 @@ def _download_and_extract(tag: str, repo_owner: str, repo_name: str) -> tuple[bo
 
 def _replace_project(src: Path, dst: Path) -> None:
     """用 src 目录内容整体替换 dst，保留用户数据。"""
-    preserve = {".env", "user_data", "output", ".git", ".gitignore"}
+    preserve = {".env", "user_data", "user_data_edge", "output", ".git", ".gitignore"}
 
     # 新版本包含的条目
     new_items = {item.name for item in src.iterdir()}

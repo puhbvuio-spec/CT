@@ -385,7 +385,7 @@ def run_x_top_comments_spider(
 ):
     """运行 X/Twitter 热门评论爬取任务的驱动函数。
 
-    读取 txt_path 中的推文链接，连接 Chrome 浏览器并逐个抓取首层评论，
+    读取 txt_path 中的推文链接，连接本地浏览器并逐个抓取首层评论，
     按点赞数降序排序，最终将前 N 条评论保存至 Excel 文件中。
     """
     if config is None:
@@ -394,6 +394,7 @@ def run_x_top_comments_spider(
     page_load_timeout_val = int(config.get("page_load_timeout", 30000))
     scroll_pause = float(config.get("scroll_interval", 4.0))
     no_new_scroll_limit = int(config.get("no_new_scroll_limit", 5))
+    browser_choice = config.get("browser")
 
     completed_path = None
     page = None
@@ -420,12 +421,12 @@ def run_x_top_comments_spider(
         log_line(log_callback, f"输出文件位置：{output_path}")
 
         with sync_playwright() as playwright:
-            log_line(log_callback, "正在连接本地 Chrome 浏览器...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+                _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
             except Exception as exc:
-                log_error(log_callback, f"无法连接 Chrome 浏览器：{exc}")
-                log_error(log_callback, "连接失败：请确认 Chrome 已自动打开并已成功登录 X/Twitter 账号。")
+                log_error(log_callback, f"无法连接浏览器：{exc}")
+                log_error(log_callback, "连接失败：请确认浏览器已自动打开并已成功登录 X/Twitter 账号。")
                 return
 
             page = context.new_page()

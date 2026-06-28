@@ -361,6 +361,7 @@ def run_x_keyword_author_works_spider(
     initial_load_delay = float(config.get("initial_load_delay", INITIAL_LOAD_DELAY))
     search_refresh_count = int(config.get("search_refresh_count", 3))
     search_refresh_interval = float(config.get("search_refresh_interval", 5.0))
+    browser_choice = config.get("browser")
 
     completed_path = None
     search_page = profile_page = works_page = None
@@ -372,9 +373,9 @@ def run_x_keyword_author_works_spider(
         )
         if quick_mode_enabled(quick_mode_value):
             log_line(log_callback, f"快速模式已开启：作者主页作品最多取最新 {QUICK_PROFILE_WORK_LIMIT} 条，不足则采完即停。")
-        ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
+        ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback, browser=browser_choice)
         with sync_playwright() as playwright:
-            _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+            _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
             search_page = context.new_page()
             profile_page = context.new_page()
             works_page = context.new_page()

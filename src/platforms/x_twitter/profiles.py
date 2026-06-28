@@ -423,6 +423,7 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
     cooldown_min = float(config.get("cooldown_min", 2.0))
     cooldown_max = float(config.get("cooldown_max", 5.0))
     cooldown_every_val = int(config.get("cooldown_every", 5))
+    browser_choice = config.get("browser")
 
     output_path = None
     try:
@@ -442,11 +443,11 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                 return
 
         with sync_playwright() as p:
-            log_line(log_callback, "正在连接本地 Chrome...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(p, cdp_port_or_url)
+                _, context = connect_existing_chromium(p, cdp_port_or_url, browser=browser_choice)
             except Exception as e:
-                log_error(log_callback, f"连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。错误：{e}")
+                log_error(log_callback, f"连接失败：请确认浏览器已自动打开并已登录 X/Twitter。错误：{e}")
                 return
 
             tweet_page = context.new_page() if not is_profile_mode else None

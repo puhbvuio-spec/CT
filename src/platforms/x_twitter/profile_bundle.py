@@ -163,6 +163,7 @@ def run_x_profile_bundle_spider(
         initial_load_delay = float(config.get("initial_load_delay", INITIAL_LOAD_DELAY))
         date_window_size = int(config.get("date_window_size", 20))
         include_reposts = str(config.get("include_reposts", "否")).strip() == "是"
+        browser_choice = config.get("browser")
 
         requested_time_limit = limit_time_str == "是"
         limit_time_bool = False
@@ -185,12 +186,12 @@ def run_x_profile_bundle_spider(
         )
 
         with sync_playwright() as playwright:
-            log_line(log_callback, "正在连接本地 Chrome...")
+            log_line(log_callback, "正在连接本地浏览器...")
             try:
-                _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+                _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
             except Exception as exc:
                 log_error(log_callback, f"无法连接浏览器：{exc}")
-                log_error(log_callback, "连接失败：请确认 Chrome 已自动打开并已登录 X/Twitter。")
+                log_error(log_callback, "连接失败：请确认浏览器已自动打开并已登录 X/Twitter。")
                 return
 
             page = context.new_page()

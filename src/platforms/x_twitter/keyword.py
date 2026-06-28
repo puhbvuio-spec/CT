@@ -455,14 +455,15 @@ def _x_comment_consumer(keyword, queue_obj, cdp_port_or_url, writer, writer_lock
                        log_callback, stop_event, pause_event, max_comments,
                        consumers_ready=None, page_timeout=30000,
                        comment_no_new_scroll_limit=5,
-                       comment_refresh_count=3, comment_refresh_interval=5.0):
+                       comment_refresh_count=3, comment_refresh_interval=5.0,
+                       browser_choice=None):
     """Consumer thread: creates its own Playwright connection + page, pops from queue."""
     log = _make_keyword_log_callback(log_callback, keyword)
     comments_page = None
     try:
         with sync_playwright() as p:
             try:
-                _, context = connect_existing_chromium(p, cdp_port_or_url)
+                _, context = connect_existing_chromium(p, cdp_port_or_url, browser=browser_choice)
                 comments_page = context.new_page()
             except Exception as exc:
                 log(f"    评论线程连接浏览器失败: {exc}")
@@ -624,7 +625,8 @@ def _scrape_single_x_keyword(base_keyword, adv_params, port,
                              max_comment_tabs, max_queue_size,
                              comment_no_new_scroll_limit=5,
                              search_refresh_count=3, search_refresh_interval=5.0,
-                             comment_refresh_count=3, comment_refresh_interval=5.0):
+                             comment_refresh_count=3, comment_refresh_interval=5.0,
+                             browser_choice=None):
     """Scrape a single X keyword in this thread. Spawns comment consumer threads if needed."""
     log = _make_keyword_log_callback(log_callback, base_keyword)
     output_path = None
@@ -669,7 +671,7 @@ def _scrape_single_x_keyword(base_keyword, adv_params, port,
             end_dt = datetime.now()
 
         with sync_playwright() as p:
-            _, context = connect_existing_chromium(p, port)
+            _, context = connect_existing_chromium(p, port, browser=browser_choice)
             search_page = context.new_page()
             profile_page = context.new_page()
 
@@ -686,7 +688,8 @@ def _scrape_single_x_keyword(base_keyword, adv_params, port,
                               log_callback, stop_event, pause_event, max_comments,
                               consumers_ready, search_page_timeout,
                               comment_no_new_scroll_limit,
-                              comment_refresh_count, comment_refresh_interval),
+                              comment_refresh_count, comment_refresh_interval,
+                              browser_choice),
                         daemon=True,
                     )
                     t.start()
@@ -934,6 +937,7 @@ def run_x_spider(keywords_list, adv_params, port, log_callback, finish_callback,
     empty_retry_rounds = max(0, min(10, int(config.get("empty_retry_rounds", 2))))
     empty_retry_cooldown_min = float(config.get("empty_retry_cooldown_min", 15.0))
     empty_retry_cooldown_max = float(config.get("empty_retry_cooldown_max", 30.0))
+    browser_choice = config.get("browser")
 
     def run_keyword_batch(batch_keywords: list[str], round_label: str) -> dict[str, str]:
         """
@@ -960,6 +964,7 @@ def run_x_spider(keywords_list, adv_params, port, log_callback, finish_callback,
                     comment_no_new_scroll_limit,
                     search_refresh_count, search_refresh_interval,
                     comment_refresh_count, comment_refresh_interval,
+                    browser_choice,
                 )
                 if path:
                     batch_paths[base_keyword] = path
@@ -983,6 +988,7 @@ def run_x_spider(keywords_list, adv_params, port, log_callback, finish_callback,
                     comment_no_new_scroll_limit,
                     search_refresh_count, search_refresh_interval,
                     comment_refresh_count, comment_refresh_interval,
+                    browser_choice,
                 )
                 future_to_keyword[future] = base_keyword
 
@@ -998,7 +1004,7 @@ def run_x_spider(keywords_list, adv_params, port, log_callback, finish_callback,
 
     try:
         # pre-launch browser once before fanning out to threads
-        ensure_chrome_for_cdp(port, log_callback=log_callback)
+        ensure_chrome_for_cdp(port, log_callback=log_callback, browser=browser_choice)
 
         get_comments_bool = adv_params.get("get_comments") == "是"
         if not get_comments_bool:
