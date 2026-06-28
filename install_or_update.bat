@@ -13,6 +13,7 @@ rem   set SCRAPER_INSTALL_DIR=D:\tools\social-platform-scraper
 
 set "APP_NAME=Social Platform Scraper"
 set "REPO_URL=https://github.com/puhbvuio-spec/CT.git"
+set "REPO_ZIP_URL=https://github.com/puhbvuio-spec/CT/archive/refs/heads/main.zip"
 set "DEFAULT_DIR=%USERPROFILE%\social-platform-scraper"
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
@@ -257,6 +258,19 @@ if exist "%INSTALL_DIR%\.git" (
     echo.
     echo Updating existing repository...
     pushd "%INSTALL_DIR%" || exit /b 1
+    git rev-parse --is-inside-work-tree >nul 2>nul
+    if errorlevel 1 (
+        popd
+        echo [WARN] Existing .git directory looks incomplete.
+        call :move_incomplete_target || exit /b 1
+        goto prepare_source
+    )
+    if not exist "%INSTALL_DIR%\main.py" (
+        popd
+        echo [WARN] Existing checkout looks incomplete.
+        call :move_incomplete_target || exit /b 1
+        goto prepare_source
+    )
     set "CURRENT_REMOTE="
     for /f "delims=" %%R in ('git remote get-url origin 2^>nul') do set "CURRENT_REMOTE=%%R"
     if defined CURRENT_REMOTE (
@@ -317,9 +331,112 @@ if exist "%INSTALL_DIR%" (
 )
 
 echo.
-echo Cloning repository...
-git clone "%REPO_URL%" "%INSTALL_DIR%"
-if errorlevel 1 exit /b 1
+call :clone_source
+if errorlevel 1 (
+    echo.
+    echo [WARN] Git clone failed after retries. Trying ZIP download fallback...
+    call :download_source_zip || exit /b 1
+)
+exit /b 0
+
+:clone_source
+set "CLONE_TMP=%INSTALL_DIR%.gitclone_%RANDOM%%RANDOM%"
+if exist "!CLONE_TMP!" rmdir /s /q "!CLONE_TMP!"
+for /L %%A in (1,1,3) do (
+    echo.
+    echo Cloning repository, attempt %%A/3...
+    git -c http.version=HTTP/1.1 clone --depth 1 "%REPO_URL%" "!CLONE_TMP!"
+    if not errorlevel 1 (
+        call :replace_empty_target_with "!CLONE_TMP!" || exit /b 1
+        exit /b 0
+    )
+    if exist "!CLONE_TMP!" rmdir /s /q "!CLONE_TMP!"
+    if not "%%A"=="3" (
+        echo [WARN] Clone attempt %%A failed. Retrying in 5 seconds...
+        timeout /t 5 /nobreak >nul
+    )
+)
+exit /b 1
+
+:download_source_zip
+set "ZIP_TMP=%TEMP%\ct_source_%RANDOM%%RANDOM%.zip"
+set "EXTRACT_TMP=%TEMP%\ct_source_%RANDOM%%RANDOM%"
+set "ZIP_ROOT="
+if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
+
+echo.
+echo Downloading repository ZIP...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%REPO_ZIP_URL%' -OutFile '%ZIP_TMP%' -UseBasicParsing"
+if errorlevel 1 (
+    echo [ERROR] ZIP download failed. Check network access to github.com.
+    if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+    exit /b 1
+)
+
+echo Extracting repository ZIP...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP_TMP%' -DestinationPath '%EXTRACT_TMP%' -Force"
+if errorlevel 1 (
+    echo [ERROR] ZIP extraction failed.
+    if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+    if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
+    exit /b 1
+)
+
+for /d %%D in ("!EXTRACT_TMP!\*") do (
+    if not defined ZIP_ROOT set "ZIP_ROOT=%%~fD"
+)
+if not defined ZIP_ROOT (
+    echo [ERROR] ZIP package did not contain a source directory.
+    if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+    if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
+    exit /b 1
+)
+
+call :replace_empty_target_with "!ZIP_ROOT!" || (
+    if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+    if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
+    exit /b 1
+)
+if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
+if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
+echo [OK] Installed from ZIP fallback. Future automatic git update is unavailable for this copy.
+exit /b 0
+
+:replace_empty_target_with
+set "SOURCE_DIR=%~1"
+if not exist "%SOURCE_DIR%\main.py" (
+    echo [ERROR] Source directory is invalid: "%SOURCE_DIR%"
+    exit /b 1
+)
+if exist "%INSTALL_DIR%" (
+    dir /b "%INSTALL_DIR%" 2>nul | findstr /r "." >nul
+    if not errorlevel 1 (
+        echo [ERROR] Target directory is no longer empty:
+        echo        "%INSTALL_DIR%"
+        exit /b 1
+    )
+    rmdir "%INSTALL_DIR%" 2>nul
+)
+for %%I in ("%INSTALL_DIR%") do set "PARENT_DIR=%%~dpI"
+if not exist "!PARENT_DIR!" mkdir "!PARENT_DIR!"
+move /y "%SOURCE_DIR%" "%INSTALL_DIR%" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to move source into target directory.
+    exit /b 1
+)
+exit /b 0
+
+:move_incomplete_target
+set "BROKEN_DIR=%INSTALL_DIR%_incomplete_%RANDOM%%RANDOM%"
+echo Moving incomplete directory aside:
+echo   "%INSTALL_DIR%"
+echo   -^> "!BROKEN_DIR!"
+move /y "%INSTALL_DIR%" "!BROKEN_DIR!" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to move incomplete directory aside.
+    exit /b 1
+)
 exit /b 0
 
 :setup_venv
