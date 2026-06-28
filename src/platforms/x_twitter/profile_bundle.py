@@ -35,33 +35,28 @@ from src.platforms.x_twitter.profile_tweets import (
 from src.platforms.x_twitter.profiles import extract_profile_record, normalize_x_url
 
 
-PROFILE_FIELDS = ["作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
+PROFILE_FIELDS = ["作者主页链接", "作者名称", "作者ID", "粉丝量", "作者简介"]
 TWEET_FIELDS = [
     "序号",
+    "编号",
+    "推文链接",
+    "作品链接",
+    "博主主页链接",
     "作者主页链接",
-    "作者名称",
-    "作者ID",
-    "粉丝数",
-    "作者简介",
-    "帖子ID",
-    "发布时间",
-    "帖子内容",
+    "标题",
+    "作品内容",
+    "频道名称",
+    "发布日期",
+    "作品类型",
+    "直播状态",
+    "关联作品标题",
+    "关联作品链接",
+    "作品时长",
+    "作品简介",
     "浏览量",
-    "点赞量",
-    "转发量",
+    "播放量",
+    "点赞数",
     "评论数",
-    "帖子链接",
-]
-SUMMARY_FIELDS = [
-    "作者主页链接",
-    "作者名称",
-    "作者ID",
-    "粉丝数",
-    "作者简介",
-    "采集推文数",
-    "推文链接列表",
-    "推文发布时间列表",
-    "推文内容列表",
 ]
 
 
@@ -73,12 +68,11 @@ def _parse_date_range(start_date: str, end_date: str) -> tuple[datetime, datetim
     return start_dt, end_dt
 
 
-def _cell_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
-
-
-def _join_cell(values) -> str:
-    return "\n".join(_cell_text(value) for value in values if _cell_text(value))
+def _cell_text(value: str, limit: int | None = None) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if limit is not None and len(text) > limit:
+        return text[:limit].rstrip()
+    return text
 
 
 def _fallback_profile_record(profile_url: str) -> dict[str, str]:
@@ -93,37 +87,41 @@ def _fallback_profile_record(profile_url: str) -> dict[str, str]:
     }
 
 
-def _enriched_tweet_row(index: int, profile_record: dict[str, str], tweet: dict[str, str]) -> dict[str, str]:
-    base = row_from_tweet(index, tweet)
+def build_profile_row(profile_record: dict[str, str]) -> dict[str, str]:
     return {
-        "序号": base.get("序号", str(index)),
         "作者主页链接": profile_record.get("作者主页链接", ""),
         "作者名称": profile_record.get("作者的名称", ""),
         "作者ID": profile_record.get("账号ID", ""),
-        "粉丝数": profile_record.get("粉丝数", ""),
+        "粉丝量": profile_record.get("粉丝数", ""),
         "作者简介": profile_record.get("简介", ""),
-        "帖子ID": base.get("帖子ID", ""),
-        "发布时间": base.get("发布时间", ""),
-        "帖子内容": base.get("帖子内容", ""),
-        "浏览量": base.get("浏览量", ""),
-        "点赞量": base.get("点赞量", ""),
-        "转发量": base.get("转发量", ""),
-        "评论数": base.get("评论数", ""),
-        "帖子链接": base.get("帖子链接", ""),
     }
 
 
-def build_summary_row(profile_record: dict[str, str], tweets: list[dict[str, str]]) -> dict[str, str]:
+def build_tweet_row(index: int, profile_record: dict[str, str], tweet: dict[str, str]) -> dict[str, str]:
+    base = row_from_tweet(index, tweet)
+    tweet_url = base.get("帖子链接", "")
+    content = _cell_text(base.get("帖子内容", ""))
     return {
+        "序号": base.get("序号", str(index)),
+        "编号": base.get("帖子ID", ""),
+        "推文链接": tweet_url,
+        "作品链接": tweet_url,
+        "博主主页链接": profile_record.get("作者主页链接", ""),
         "作者主页链接": profile_record.get("作者主页链接", ""),
-        "作者名称": profile_record.get("作者的名称", ""),
-        "作者ID": profile_record.get("账号ID", ""),
-        "粉丝数": profile_record.get("粉丝数", ""),
-        "作者简介": profile_record.get("简介", ""),
-        "采集推文数": str(len(tweets)),
-        "推文链接列表": _join_cell(tweet.get("url", "") for tweet in tweets),
-        "推文发布时间列表": _join_cell(tweet.get("published_at", "") or tweet.get("publishedAt", "") for tweet in tweets),
-        "推文内容列表": _join_cell(tweet.get("content", "") for tweet in tweets),
+        "标题": _cell_text(content, limit=120),
+        "作品内容": f"{content}[推文]" if content else "",
+        "频道名称": profile_record.get("作者的名称", ""),
+        "发布日期": base.get("发布时间", ""),
+        "作品类型": "推文",
+        "直播状态": "非直播",
+        "关联作品标题": "",
+        "关联作品链接": "",
+        "作品时长": "",
+        "作品简介": content,
+        "浏览量": base.get("浏览量", ""),
+        "播放量": "",
+        "点赞数": base.get("点赞量", ""),
+        "评论数": base.get("评论数", ""),
     }
 
 
@@ -178,8 +176,7 @@ def run_x_profile_bundle_spider(
             output_path,
             {
                 "博主信息": PROFILE_FIELDS,
-                "推文信息": TWEET_FIELDS,
-                "作者推文聚合": SUMMARY_FIELDS,
+                "博主对应推文": TWEET_FIELDS,
             },
             autosave_every=10,
         )
@@ -219,7 +216,7 @@ def run_x_profile_bundle_spider(
                     log_warn(log_callback, f"  博主信息采集失败，使用链接兜底：{exc}")
                     profile_record = _fallback_profile_record(profile_url)
 
-                writer.writerow("博主信息", profile_record)
+                writer.writerow("博主信息", build_profile_row(profile_record))
 
                 try:
                     tweets = collect_profile_tweets(
@@ -252,8 +249,7 @@ def run_x_profile_bundle_spider(
 
                 for tweet in tweets:
                     tweet_index += 1
-                    writer.writerow("推文信息", _enriched_tweet_row(tweet_index, profile_record, tweet))
-                writer.writerow("作者推文聚合", build_summary_row(profile_record, tweets))
+                    writer.writerow("博主对应推文", build_tweet_row(tweet_index, profile_record, tweet))
                 writer.save()
                 log_line(
                     log_callback,

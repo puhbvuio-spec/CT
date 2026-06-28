@@ -4,32 +4,48 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from src.platforms.x_twitter.profile_bundle import build_summary_row
+from src.platforms.x_twitter.profile_bundle import build_profile_row, build_tweet_row
 from src.platforms.x_twitter.windows import XProfileBundleWindow
 from src.studio.discovery import discover_tools
 from src.studio.registry import TOOLS
 
 
-def test_x_profile_bundle_summary_row():
-    row = build_summary_row(
+def test_x_profile_bundle_rows():
+    profile_record = {
+        "作者主页链接": "https://x.com/demo",
+        "作者的名称": "Demo",
+        "账号ID": "demo",
+        "粉丝数": "1000",
+        "简介": "bio",
+    }
+    profile_row = build_profile_row(profile_record)
+    tweet_row = build_tweet_row(
+        1,
+        profile_record,
         {
-            "作者主页链接": "https://x.com/demo",
-            "作者的名称": "Demo",
-            "账号ID": "demo",
-            "粉丝数": "1000",
-            "简介": "bio",
+            "post_id": "123",
+            "url": "https://x.com/demo/status/123",
+            "published_at": "2026-06-01 00:00:00",
+            "content": "first\npost",
+            "views": "100",
+            "likes": "10",
+            "replies": "2",
         },
-        [
-            {"url": "https://x.com/demo/status/1", "published_at": "2026-06-01 00:00:00", "content": "first\npost"},
-            {"url": "https://x.com/demo/status/2", "published_at": "2026-06-02 00:00:00", "content": "second post"},
-        ],
     )
 
-    assert row["作者主页链接"] == "https://x.com/demo"
-    assert row["作者名称"] == "Demo"
-    assert row["采集推文数"] == "2"
-    assert row["推文链接列表"] == "https://x.com/demo/status/1\nhttps://x.com/demo/status/2"
-    assert row["推文内容列表"] == "first post\nsecond post"
+    assert profile_row["作者主页链接"] == "https://x.com/demo"
+    assert profile_row["作者名称"] == "Demo"
+    assert profile_row["作者ID"] == "demo"
+    assert profile_row["粉丝量"] == "1000"
+    assert tweet_row["推文链接"] == "https://x.com/demo/status/123"
+    assert tweet_row["作品链接"] == "https://x.com/demo/status/123"
+    assert tweet_row["博主主页链接"] == "https://x.com/demo"
+    assert tweet_row["标题"] == "first post"
+    assert tweet_row["作品内容"] == "first post[推文]"
+    assert tweet_row["频道名称"] == "Demo"
+    assert tweet_row["作品类型"] == "推文"
+    assert tweet_row["浏览量"] == "100"
+    assert tweet_row["点赞数"] == "10"
 
 
 def test_x_profile_bundle_defaults_and_discovery():
@@ -49,6 +65,6 @@ def test_x_profile_bundle_defaults_and_discovery():
 
 
 if __name__ == "__main__":
-    test_x_profile_bundle_summary_row()
+    test_x_profile_bundle_rows()
     test_x_profile_bundle_defaults_and_discovery()
     print("x profile bundle tests passed")
