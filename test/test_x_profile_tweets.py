@@ -13,6 +13,20 @@ from src.platforms.x_twitter.profile_tweets import (
 from src.platforms.x_twitter.windows import XProfileTweetsWindow, _x_cdp_url, _x_config
 
 
+class DummyCheckpoint:
+    def latest_output_path(self):
+        return None
+
+    def add_output_path(self, output_path):
+        pass
+
+    def is_completed(self, key):
+        return False
+
+    def mark_completed(self, key, meta=None):
+        pass
+
+
 class TestXProfileTweetsLogic(unittest.TestCase):
     def test_window_defaults_to_latest_50(self):
         window = XProfileTweetsWindow.__new__(XProfileTweetsWindow)
@@ -34,6 +48,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertEqual(_x_config(values, ("max_scrolls",)), {"max_scrolls": 12, "browser": "edge"})
 
     @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
+    @patch("src.platforms.x_twitter.profile_tweets.open_task_checkpoint", return_value=DummyCheckpoint())
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
     @patch("src.platforms.x_twitter.profile_tweets.extract_post_count")
@@ -46,6 +61,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         mock_extract_count,
         mock_sync_pw,
         mock_connect,
+        mock_checkpoint,
         mock_writer,
     ):
         mock_context = MagicMock()
@@ -83,6 +99,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertTrue(any("最新推文采集" in msg for msg in log_msgs))
 
     @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
+    @patch("src.platforms.x_twitter.profile_tweets.open_task_checkpoint", return_value=DummyCheckpoint())
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
     @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile_via_search")
@@ -93,6 +110,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         mock_navigate,
         mock_sync_pw,
         mock_connect,
+        mock_checkpoint,
         mock_writer,
     ):
         mock_context = MagicMock()

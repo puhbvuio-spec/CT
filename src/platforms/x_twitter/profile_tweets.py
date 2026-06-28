@@ -104,28 +104,67 @@ def _current_page_is_profile(page, username: str) -> bool:
     return bool(current_username and current_username.lower() == username.lower().lstrip("@"))
 
 
+_EXACT_PROFILE_LINK_JS = """({ username, click }) => {
+    const target = (username || '').replace(/^@/, '').toLowerCase();
+    const links = Array.from(document.querySelectorAll('a[href]'));
+    for (const link of links) {
+        try {
+            const url = new URL(link.getAttribute('href') || '', location.origin);
+            const parts = url.pathname.split('/').filter(Boolean);
+            if (parts.length !== 1 || parts[0].toLowerCase() !== target) continue;
+            if (link.closest('[role="tablist"], nav')) continue;
+            link.scrollIntoView({ block: 'center', inline: 'center' });
+            if (click) link.click();
+            return true;
+        } catch (error) {}
+    }
+    return false;
+}"""
+
+
+def _has_exact_profile_result(page, username: str) -> bool:
+    return bool(page.evaluate(_EXACT_PROFILE_LINK_JS, {"username": username, "click": False}))
+
+
 def _click_exact_profile_result(page, username: str) -> bool:
-    return bool(
-        page.evaluate(
-            """({ username }) => {
-                const target = (username || '').replace(/^@/, '').toLowerCase();
-                const links = Array.from(document.querySelectorAll('a[href]'));
-                for (const link of links) {
-                    try {
-                        const url = new URL(link.getAttribute('href') || '', location.origin);
-                        const parts = url.pathname.split('/').filter(Boolean);
-                        if (parts.length !== 1 || parts[0].toLowerCase() !== target) continue;
-                        if (link.closest('[role="tablist"], nav')) continue;
-                        link.scrollIntoView({ block: 'center', inline: 'center' });
-                        link.click();
-                        return true;
-                    } catch (error) {}
-                }
-                return false;
-            }""",
-            {"username": username},
+    return bool(page.evaluate(_EXACT_PROFILE_LINK_JS, {"username": username, "click": True}))
+
+
+def _wait_for_exact_profile_result(page, username: str, timeout_ms: int) -> bool:
+    timeout_ms = max(1000, int(timeout_ms or 1000))
+    try:
+        page.wait_for_function(
+            _EXACT_PROFILE_LINK_JS,
+            {"username": username, "click": False},
+            timeout=timeout_ms,
         )
-    )
+        return True
+    except Exception:
+        try:
+            return _has_exact_profile_result(page, username)
+        except Exception:
+            return False
+
+
+def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=None, pause_event=None) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_ms or 1000) / 1000.0)
+    while time.monotonic() < deadline:
+        if should_stop(stop_event):
+            return False
+        if wait_if_paused(pause_event, stop_event):
+            return False
+        if _current_page_is_profile(page, username):
+            try:
+                page.wait_for_selector(
+                    'div[data-testid="UserName"], div[data-testid="UserDescription"], article[data-testid="tweet"], article',
+                    timeout=3000,
+                )
+            except Exception:
+                pass
+            return True
+        if interruptible_sleep(0.5, stop_event):
+            return False
+    return _current_page_is_profile(page, username)
 
 
 def navigate_to_profile_via_search(
@@ -158,41 +197,60 @@ def navigate_to_profile_via_search(
     except Exception as exc:
         log_warn(log_callback, f"  搜索页加载异常，继续尝试读取已加载结果：{exc}")
 
+    try:
+        page.wait_for_selector('main, div[data-testid="primaryColumn"], a[href]', timeout=min(int(page_timeout), 10000))
+    except Exception:
+        pass
     if interruptible_sleep(initial_delay, stop_event):
         return False
     if wait_if_paused(pause_event, stop_event):
         return False
 
-    try:
-        page.wait_for_selector('a[href], div[data-testid="UserCell"]', timeout=min(int(page_timeout), 15000))
-    except Exception:
-        pass
-
-    for attempt in range(2):
+    search_deadline = time.monotonic() + max(12.0, min(float(page_timeout) / 1000.0, 45.0))
+    attempt = 0
+    while time.monotonic() < search_deadline:
+        attempt += 1
         if should_stop(stop_event):
             return False
         if wait_if_paused(pause_event, stop_event):
             return False
+
+        remaining_ms = max(1000, int((search_deadline - time.monotonic()) * 1000))
+        wait_ms = min(6000, remaining_ms)
+        if not _wait_for_exact_profile_result(page, username, wait_ms):
+            try:
+                page.keyboard.press("End")
+            except Exception:
+                pass
+            interruptible_sleep(1.0, stop_event)
+            continue
 
         try:
             clicked = _click_exact_profile_result(page, username)
         except Exception:
             clicked = False
         if clicked:
-            interruptible_sleep(1.5, stop_event)
-            try:
-                page.wait_for_selector('div[data-testid="UserName"], article[data-testid="tweet"], article', timeout=min(int(page_timeout), 15000))
-            except Exception:
-                pass
-            if _current_page_is_profile(page, username):
+            log_line(log_callback, f"  已点击搜索结果，等待作者主页稳定：@{username}")
+            if _wait_until_profile_ready(
+                page,
+                username,
+                min(int(page_timeout), 20000),
+                stop_event=stop_event,
+                pause_event=pause_event,
+            ):
                 return True
-
-        if attempt == 0:
+            log_warn(log_callback, f"  搜索结果已点击但主页尚未稳定，重试：@{username}")
             try:
-                page.keyboard.press("End")
+                page.goto(search_url, wait_until="domcontentloaded", timeout=page_timeout)
             except Exception:
                 pass
-            interruptible_sleep(1.0, stop_event)
+
+        if attempt % 3 == 0:
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=page_timeout)
+                interruptible_sleep(max(1.0, float(initial_delay)), stop_event)
+            except Exception:
+                pass
 
     log_warn(log_callback, f"  未能从搜索结果进入作者主页：@{username}")
     return False
