@@ -5,7 +5,11 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.platforms.x_twitter.profile_tweets import DEFAULT_PROFILE_TWEET_LIMIT, run_x_profile_tweets_spider
+from src.platforms.x_twitter.profile_tweets import (
+    DEFAULT_PROFILE_TWEET_LIMIT,
+    build_profile_search_url,
+    run_x_profile_tweets_spider,
+)
 from src.platforms.x_twitter.windows import XProfileTweetsWindow
 
 
@@ -17,14 +21,22 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertEqual(defaults["max_tweets_per_author"], DEFAULT_PROFILE_TWEET_LIMIT)
         self.assertEqual(defaults["max_scrolls"], 80)
 
+    def test_profile_search_url_uses_user_search(self):
+        self.assertEqual(
+            build_profile_search_url("DemoUser"),
+            "https://x.com/search?q=%40DemoUser&src=typed_query&f=user",
+        )
+
     @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
     @patch("src.platforms.x_twitter.profile_tweets.extract_post_count")
+    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile_via_search")
     @patch("src.platforms.x_twitter.profile_tweets.collect_profile_tweets")
     def test_default_collects_latest_50_without_time_filter(
         self,
         mock_collect,
+        mock_navigate,
         mock_extract_count,
         mock_sync_pw,
         mock_connect,
@@ -32,6 +44,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
     ):
         mock_context = MagicMock()
         mock_connect.return_value = (MagicMock(), mock_context)
+        mock_navigate.return_value = True
         mock_collect.return_value = ([], 0, DEFAULT_PROFILE_TWEET_LIMIT)
 
         log_msgs = []
@@ -48,6 +61,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         )
 
         self.assertEqual(mock_collect.call_count, 1)
+        mock_navigate.assert_called_once()
         mock_extract_count.assert_not_called()
         self.assertEqual(mock_context.new_page.call_count, 1)
 
@@ -56,6 +70,7 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         self.assertFalse(args[4])
         self.assertFalse(args[7])
         self.assertIsNone(kwargs.get("keyword"))
+        self.assertTrue(kwargs.get("page_already_loaded"))
         self.assertEqual(kwargs.get("max_collect"), DEFAULT_PROFILE_TWEET_LIMIT)
         self.assertTrue(any("忽略时间窗口" in msg for msg in log_msgs))
         self.assertTrue(any("忽略补充关键词" in msg for msg in log_msgs))
@@ -64,16 +79,19 @@ class TestXProfileTweetsLogic(unittest.TestCase):
     @patch("src.platforms.x_twitter.profile_tweets.XlsxRowWriter")
     @patch("src.platforms.x_twitter.profile_tweets.connect_existing_chromium")
     @patch("src.platforms.x_twitter.profile_tweets.sync_playwright")
+    @patch("src.platforms.x_twitter.profile_tweets.navigate_to_profile_via_search")
     @patch("src.platforms.x_twitter.profile_tweets.collect_profile_tweets")
     def test_configured_latest_limit_and_scrolls(
         self,
         mock_collect,
+        mock_navigate,
         mock_sync_pw,
         mock_connect,
         mock_writer,
     ):
         mock_context = MagicMock()
         mock_connect.return_value = (MagicMock(), mock_context)
+        mock_navigate.return_value = True
         mock_collect.return_value = ([], 0, 20)
 
         run_x_profile_tweets_spider(
@@ -88,9 +106,11 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         )
 
         self.assertEqual(mock_collect.call_count, 1)
+        mock_navigate.assert_called_once()
         args, kwargs = mock_collect.call_args
         self.assertEqual(args[3], 12)
         self.assertFalse(args[4])
+        self.assertTrue(kwargs.get("page_already_loaded"))
         self.assertEqual(kwargs.get("max_collect"), 20)
         self.assertIsNone(kwargs.get("keyword"))
 

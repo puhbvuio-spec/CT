@@ -19,6 +19,7 @@ from src.core import (
     wait_if_paused,
     XlsxRowWriter,
 )
+from src.platforms.x_twitter.profile_tweets import navigate_to_profile_via_search
 
 OUTPUT_FIELDS = ["推文链接", "作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
 OUTPUT_FIELDS_PROFILE_MODE = ["作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
@@ -347,14 +348,15 @@ def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_ca
         "_view_value": view_value,
     }
 
-def extract_profile_record(profile_page, profile_url: str, log_callback, page_timeout=None, stop_event=None) -> dict | None:
-    """Extract profile info directly from profile URL."""
+def extract_profile_record(profile_page, profile_url: str, log_callback, page_timeout=None, stop_event=None, needs_navigation=True) -> dict | None:
+    """Extract profile info from a profile page, optionally navigating first."""
     profile_url = normalize_x_url(profile_url)
-    try:
-        profile_page.goto(profile_url, wait_until="domcontentloaded", timeout=page_timeout if page_timeout is not None else PAGE_LOAD_TIMEOUT)
-    except Exception as e:
-        log_warn(log_callback, f"跳过：无法加载主页：{profile_url}，错误：{e}")
-        return None
+    if needs_navigation:
+        try:
+            profile_page.goto(profile_url, wait_until="domcontentloaded", timeout=page_timeout if page_timeout is not None else PAGE_LOAD_TIMEOUT)
+        except Exception as e:
+            log_warn(log_callback, f"跳过：无法加载主页：{profile_url}，错误：{e}")
+            return None
 
     # Extract account ID from URL
     account_match = re.search(r"x\.com/([^/?#]+)/?$", profile_url)
@@ -464,7 +466,19 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                 
                 if is_profile_mode:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理博主链接：{link}")
-                    record = extract_profile_record(profile_page, link, log_callback, page_timeout=page_load_timeout, stop_event=stop_event)
+                    if navigate_to_profile_via_search(
+                        profile_page,
+                        link,
+                        log_callback,
+                        page_timeout=page_load_timeout,
+                        stop_event=stop_event,
+                        pause_event=pause_event,
+                        initial_delay=2.0,
+                    ):
+                        record = extract_profile_record(profile_page, link, log_callback, page_timeout=page_load_timeout, stop_event=stop_event, needs_navigation=False)
+                    else:
+                        log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{link}")
+                        record = None
                 else:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理推文：{link}")
                     record = extract_tweet_author_record(tweet_page, profile_page, link, log_callback, page_timeout=page_load_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event)

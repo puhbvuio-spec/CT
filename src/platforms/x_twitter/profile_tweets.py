@@ -88,6 +88,115 @@ def extract_profile_username(profile_url: str) -> str:
     return username
 
 
+def build_profile_search_url(username: str) -> str:
+    import urllib.parse
+
+    query = f"@{username.strip().lstrip('@')}"
+    return f"https://x.com/search?q={urllib.parse.quote(query)}&src=typed_query&f=user"
+
+
+def _current_page_is_profile(page, username: str) -> bool:
+    try:
+        current_username = extract_profile_username(page.url)
+    except Exception:
+        current_username = ""
+    return bool(current_username and current_username.lower() == username.lower().lstrip("@"))
+
+
+def _click_exact_profile_result(page, username: str) -> bool:
+    return bool(
+        page.evaluate(
+            """({ username }) => {
+                const target = (username || '').replace(/^@/, '').toLowerCase();
+                const links = Array.from(document.querySelectorAll('a[href]'));
+                for (const link of links) {
+                    try {
+                        const url = new URL(link.getAttribute('href') || '', location.origin);
+                        const parts = url.pathname.split('/').filter(Boolean);
+                        if (parts.length !== 1 || parts[0].toLowerCase() !== target) continue;
+                        if (link.closest('[role="tablist"], nav')) continue;
+                        link.scrollIntoView({ block: 'center', inline: 'center' });
+                        link.click();
+                        return true;
+                    } catch (error) {}
+                }
+                return false;
+            }""",
+            {"username": username},
+        )
+    )
+
+
+def navigate_to_profile_via_search(
+    page,
+    profile_url: str,
+    log_callback,
+    page_timeout=None,
+    stop_event=None,
+    pause_event=None,
+    initial_delay=None,
+) -> bool:
+    """Enter a profile by searching the handle and clicking the user result."""
+    if page_timeout is None:
+        page_timeout = PAGE_LOAD_TIMEOUT
+    if initial_delay is None:
+        initial_delay = INITIAL_LOAD_DELAY
+
+    normalized_url = clean_profile_url(profile_url)
+    username = extract_profile_username(normalized_url)
+    if not username:
+        log_warn(log_callback, f"  无效的 X 博主主页链接：{profile_url}")
+        return False
+    if _current_page_is_profile(page, username):
+        return True
+
+    search_url = build_profile_search_url(username)
+    log_line(log_callback, f"  通过搜索页进入作者主页：@{username}")
+    try:
+        page.goto(search_url, wait_until="domcontentloaded", timeout=page_timeout)
+    except Exception as exc:
+        log_warn(log_callback, f"  搜索页加载异常，继续尝试读取已加载结果：{exc}")
+
+    if interruptible_sleep(initial_delay, stop_event):
+        return False
+    if wait_if_paused(pause_event, stop_event):
+        return False
+
+    try:
+        page.wait_for_selector('a[href], div[data-testid="UserCell"]', timeout=min(int(page_timeout), 15000))
+    except Exception:
+        pass
+
+    for attempt in range(2):
+        if should_stop(stop_event):
+            return False
+        if wait_if_paused(pause_event, stop_event):
+            return False
+
+        try:
+            clicked = _click_exact_profile_result(page, username)
+        except Exception:
+            clicked = False
+        if clicked:
+            interruptible_sleep(1.5, stop_event)
+            try:
+                page.wait_for_selector('div[data-testid="UserName"], article[data-testid="tweet"], article', timeout=min(int(page_timeout), 15000))
+            except Exception:
+                pass
+            if _current_page_is_profile(page, username):
+                return True
+
+        if attempt == 0:
+            try:
+                page.keyboard.press("End")
+            except Exception:
+                pass
+            interruptible_sleep(1.0, stop_event)
+
+    log_warn(log_callback, f"  未能从搜索结果进入作者主页：@{username}")
+    return False
+
+
 def parse_profile_urls(text: str) -> list[str]:
     urls: list[str] = []
     seen = set()
@@ -359,7 +468,7 @@ def collect_profile_tweets(
         search_query = f"from:{username} {keyword}"
         target_url = f"https://x.com/search?q={urllib.parse.quote(search_query)}&src=typed_query&f=live"
     else:
-        target_url = clean_profile_url(profile_url)
+        target_url = ""
 
     tweets: list[dict[str, str]] = []
     pending_rows: list[dict[str, str]] = []
@@ -375,7 +484,18 @@ def collect_profile_tweets(
 
     try:
         if not page_already_loaded:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=page_timeout)
+            if target_url:
+                page.goto(target_url, wait_until="domcontentloaded", timeout=page_timeout)
+            elif not navigate_to_profile_via_search(
+                page,
+                profile_url,
+                log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                initial_delay=initial_load_delay,
+            ):
+                raise RuntimeError(f"未能通过搜索页进入作者主页：{profile_url}")
             page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             interruptible_sleep(initial_load_delay, stop_event)
         else:
@@ -686,8 +806,17 @@ def run_x_profile_tweets_spider(
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 开始处理博主主页：{profile_url}")
                 
                 try:
-                    page.goto(clean_profile_url(profile_url), wait_until="domcontentloaded", timeout=page_load_timeout_val)
-                    interruptible_sleep(initial_load_delay_val, stop_event)
+                    if not navigate_to_profile_via_search(
+                        page,
+                        profile_url,
+                        log_callback,
+                        page_timeout=page_load_timeout_val,
+                        stop_event=stop_event,
+                        pause_event=pause_event,
+                        initial_delay=initial_load_delay_val,
+                    ):
+                        log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{profile_url}")
+                        continue
                     if keyword_list:
                         log_line(log_callback, "  已忽略补充关键词：主页推文采集现在只取最新作品样本。")
 

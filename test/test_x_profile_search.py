@@ -15,7 +15,6 @@ def finish_callback(output_path):
 
 def run_test():
     profile_urls_text = "https://x.com/elonmusk"
-    use_keywords_str = "是"
     keywords_text = "AI\nTesla"
     limit_time_str = "否"
     start_date = "2025-05-06"
@@ -37,7 +36,6 @@ def run_test():
     print("Starting X Profile Keywords Search Test...")
     run_x_profile_tweets_spider(
         profile_urls_text=profile_urls_text,
-        use_keywords_str=use_keywords_str,
         keywords_text=keywords_text,
         limit_time_str=limit_time_str,
         start_date=start_date,
