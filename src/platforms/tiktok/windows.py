@@ -132,6 +132,68 @@ class TikTokKeywordAuthorWorksWindow(SimpleToolWindow):
         )
 
 
+class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
+    tool_id = "tiktok_hashtag_author_works"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TikTok 话题作者作品采集",
+            [
+                FieldSpec("limit_time", "是否限制话题命中时间？", kind="combo", options=("是", "否"), default="是"),
+                FieldSpec("start_date", "开始日期 YYYY-MM-DD", default=DEFAULT_START_DATE),
+                FieldSpec("end_date", "结束日期 YYYY-MM-DD", default=DEFAULT_END_DATE),
+                FieldSpec(
+                    "hashtags",
+                    "话题页链接或话题名，每行一个",
+                    kind="text_or_file",
+                    required=True,
+                    placeholder="https://www.tiktok.com/tag/palworld\npalworld\n#monsterhunter",
+                ),
+                FieldSpec("quick_mode", "快速模式（作品最多取最新50条）？", kind="combo", options=("是", "否"), default="是"),
+            ],
+            height=720,
+        )
+        self.bind_field_visibility("limit_time", "是", ["start_date", "end_date"])
+
+    def validate_values(self, values):
+        from src.platforms.tiktok.hashtag_author_works import parse_hashtag_sources
+        from src.platforms.tiktok.keyword import parse_date_range
+
+        parse_hashtag_sources(_lines(values["hashtags"]))
+        if values.get("limit_time") == "是":
+            parse_date_range(values["start_date"], values["end_date"])
+
+    def tool_config_params(self):
+        return [
+            ConfigParam("max_seed_works", "话题入口最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
+            ConfigParam("max_authors", "最多进入作者主页数", kind="int", default=100, minimum=1, maximum=1000),
+            ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
+            ConfigParam("max_topic_scrolls", "话题页最大滚动次数", kind="int", default=360, minimum=5, maximum=2000),
+            ConfigParam("max_profile_scrolls", "作者主页最大滚动次数", kind="int", default=500, minimum=10, maximum=2000),
+            ConfigParam("page_load_timeout", "页面加载超时(毫秒)", kind="int", default=45000, minimum=10000, maximum=120000, step=1000),
+            ConfigParam("scroll_interval", "话题页滚动间隔(秒)", kind="float", default=0.7, minimum=0.2, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("profile_scroll_interval", "作者主页滚动间隔(秒)", kind="float", default=2.5, minimum=0.5, maximum=15.0, step=0.1, decimals=1),
+            ConfigParam("no_new_scroll_limit", "连续无新增停止阈值", kind="int", default=10, minimum=2, maximum=50),
+        ]
+
+    def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
+        from src.platforms.tiktok.hashtag_author_works import run_tiktok_hashtag_author_works_spider
+
+        config = {k: v for k, v in values.items() if k in ("quick_mode", "max_seed_works", "max_authors", "max_profile_works_per_author", "max_topic_scrolls", "max_profile_scrolls", "page_load_timeout", "scroll_interval", "profile_scroll_interval", "no_new_scroll_limit", "scroll_px", "detail_load_timeout", "detail_delay_min", "detail_delay_max")}
+        return run_tiktok_hashtag_author_works_spider(
+            _lines(values["hashtags"]),
+            values["limit_time"],
+            values["start_date"],
+            values["end_date"],
+            DEFAULT_TIKTOK_CDP_URL,
+            log_callback,
+            finish_callback,
+            stop_event,
+            pause_event=pause_event,
+            config=config,
+        )
+
+
 class TikTokProfilesWindow(SimpleToolWindow):
     tool_id = "tiktok_profile_directory"
 

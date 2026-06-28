@@ -1,0 +1,8 @@
+{
+  "max_seed_works": 300,
+  "max_authors": 100,
+  "max_profile_works_per_author": 50,
+  "max_topic_scrolls": 360,
+  "max_profile_scrolls": 500,
+  "profile_scroll_interval": 2.5
+}

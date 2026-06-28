@@ -136,6 +136,15 @@ TOOLS: list[ToolSpec] = [
         tags=("TikTok", "keyword", "author", "profile", "works"),
     ),
     ToolSpec(
+        tool_id="tiktok_hashtag_author_works",
+        name="TikTok 话题作者作品采集",
+        category="TikTok",
+        summary="按 TikTok 话题页发现博主，进入博主主页采集简介、粉丝数，并按数量采集最新视频标题；支持完整 tag 链接或话题名输入。",
+        entrypoint="src.platforms.tiktok.windows.TikTokHashtagAuthorWorksWindow",
+        implementation_path="platforms/tiktok/hashtag_author_works.py",
+        tags=("TikTok", "hashtag", "tag", "author", "profile", "works"),
+    ),
+    ToolSpec(
         tool_id="tiktok_profile_directory",
         name="TikTok 博主信息",
         category="TikTok",

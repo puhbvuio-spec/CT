@@ -133,6 +133,14 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "detail_delay_min": 2.0,
         "detail_delay_max": 5.0,
     },
+    "tiktok_hashtag_author_works": {
+        "max_seed_works": 300,
+        "max_authors": 100,
+        "max_profile_works_per_author": 50,
+        "max_topic_scrolls": 360,
+        "max_profile_scrolls": 500,
+        "profile_scroll_interval": 2.5,
+    },
     "tiktok_profile_play_counts": {
     },
     "tiktok_paired_context_metrics": {
