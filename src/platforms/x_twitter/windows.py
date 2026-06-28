@@ -7,6 +7,15 @@ from src.ui.config_dialog import ConfigParam
 
 DEFAULT_START_DATE = "2025-05-06"
 DEFAULT_END_DATE = "2026-05-06"
+X_RECOVERY_CONFIG_KEYS = (
+    "x_recovery_wait_1",
+    "x_recovery_wait_2",
+    "x_recovery_wait_later",
+    "x_network_check_enabled",
+    "x_network_check_url",
+    "x_network_check_timeout",
+    "x_network_issue_wait",
+)
 BROWSER_OPTIONS = ("全局设置", "Chrome", "Edge")
 
 
@@ -39,11 +48,30 @@ def _x_cdp_url(values) -> str:
 
 
 def _x_config(values, keys):
-    config = {k: v for k, v in values.items() if k in keys}
+    config_keys = set(keys) | set(X_RECOVERY_CONFIG_KEYS)
+    config = {k: v for k, v in values.items() if k in config_keys}
     browser = _browser_value(values)
     if browser:
         config["browser"] = browser
     return config
+
+
+def _x_recovery_config_params() -> list[ConfigParam]:
+    return [
+        ConfigParam("x_recovery_wait_1", "X错误等待1(秒)", kind="int", default=120, minimum=0, maximum=3600, step=10,
+                    tooltip="检测到 X 的重新加载/出错提示且网络正常时，第一次等待多久后刷新。"),
+        ConfigParam("x_recovery_wait_2", "X错误等待2(秒)", kind="int", default=180, minimum=0, maximum=3600, step=10,
+                    tooltip="第二次检测到同类错误时的等待时间。"),
+        ConfigParam("x_recovery_wait_later", "X错误后续等待(秒)", kind="int", default=240, minimum=0, maximum=7200, step=10,
+                    tooltip="第三次及以后检测到同类错误时的等待时间。"),
+        ConfigParam("x_network_check_enabled", "启用网络检测", kind="bool", default=True,
+                    tooltip="X 出错时先访问 YouTube 轻量检测地址；若超时则按网络问题处理。"),
+        ConfigParam("x_network_check_timeout", "网络检测超时(秒)", kind="float", default=8.0, minimum=1.0, maximum=60.0, step=1.0, decimals=1),
+        ConfigParam("x_network_issue_wait", "网络异常等待(秒)", kind="int", default=120, minimum=0, maximum=3600, step=10,
+                    tooltip="YouTube 检测超时/失败时，等待多久后刷新重试。"),
+        ConfigParam("x_network_check_url", "网络检测URL", kind="text", default="https://www.youtube.com/generate_204",
+                    tooltip="默认使用 YouTube generate_204。若当地网络无法访问 YouTube，可改成稳定可访问的网址或关闭网络检测。"),
+    ]
 
 
 class XKeywordWindow(SimpleToolWindow):
@@ -136,6 +164,7 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
     def tool_config_params(self):
         return [
             _browser_config_param(),
+            *_x_recovery_config_params(),
             ConfigParam("max_seed_works", "关键词入口最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
             ConfigParam("max_authors", "最多进入作者主页数", kind="int", default=100, minimum=1, maximum=1000),
             ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
@@ -216,6 +245,7 @@ class XProfilesWindow(SimpleToolWindow):
     def tool_config_params(self):
         return [
             _browser_config_param(),
+            *_x_recovery_config_params(),
             ConfigParam("tweet_ready_timeout", "推文渲染等待(毫秒)", kind="int", default=12000, minimum=3000, maximum=60000, step=1000),
             ConfigParam("cooldown_every", "冷却间隔(个)", kind="int", default=5, minimum=1, maximum=50),
         ]
@@ -309,6 +339,7 @@ class XProfileTweetsWindow(SimpleToolWindow):
     def tool_config_params(self):
         return [
             _browser_config_param(),
+            *_x_recovery_config_params(),
             ConfigParam("max_tweets_per_author", "每个博主最新推文数", kind="int", default=50, minimum=1, maximum=5000),
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
@@ -370,6 +401,7 @@ class XProfileBundleWindow(SimpleToolWindow):
     def tool_config_params(self):
         return [
             _browser_config_param(),
+            *_x_recovery_config_params(),
             ConfigParam("max_tweets_per_author", "每个作者最新推文数", kind="int", default=50, minimum=1, maximum=5000),
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),

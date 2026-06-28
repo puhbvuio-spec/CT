@@ -149,7 +149,7 @@ def find_target_article(page, target_status_id: str):
             continue
     return articles[0] if articles else None
 
-def load_tweet_page(page, tweet_url: str, target_status_id: str, log_callback, page_timeout=None, tweet_ready_timeout=None, stop_event=None, pause_event=None) -> bool:
+def load_tweet_page(page, tweet_url: str, target_status_id: str, log_callback, page_timeout=None, tweet_ready_timeout=None, stop_event=None, pause_event=None, recovery_config=None) -> bool:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
     if tweet_ready_timeout is None:
@@ -163,6 +163,7 @@ def load_tweet_page(page, tweet_url: str, target_status_id: str, log_callback, p
             stop_event=stop_event,
             pause_event=pause_event,
             context_label="X 推文页",
+            recovery_config=recovery_config,
         ):
             return False
         page.wait_for_selector('article[data-testid="tweet"]', timeout=tweet_ready_timeout)
@@ -244,7 +245,7 @@ def extract_view_count(article) -> tuple[str, float]:
             continue
     return "", 0
 
-def extract_followers_count(page, profile_url: str, page_timeout=None, stop_event=None, needs_navigation=True) -> str:
+def extract_followers_count(page, profile_url: str, page_timeout=None, stop_event=None, needs_navigation=True, recovery_config=None, log_callback=None) -> str:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
     
@@ -257,9 +258,11 @@ def extract_followers_count(page, profile_url: str, page_timeout=None, stop_even
                 page.goto(profile_url, wait_until="domcontentloaded", timeout=page_timeout)
                 if not wait_for_x_page_recovery(
                     page,
+                    log_callback=log_callback,
                     page_timeout=page_timeout,
                     stop_event=stop_event,
                     context_label="X 作者主页",
+                    recovery_config=recovery_config,
                 ):
                     return ""
         except Exception:
@@ -330,13 +333,13 @@ def extract_followers_count(page, profile_url: str, page_timeout=None, stop_even
 
     return ""
 
-def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_callback, page_timeout=None, tweet_ready_timeout=None, stop_event=None) -> dict | None:
+def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_callback, page_timeout=None, tweet_ready_timeout=None, stop_event=None, recovery_config=None) -> dict | None:
     target_status_id = extract_status_id(tweet_url)
     if not target_status_id:
         log_warn(log_callback, f"跳过：无法解析推文 ID：{tweet_url}")
         return None
 
-    if not load_tweet_page(tweet_page, tweet_url, target_status_id, log_callback, page_timeout=page_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event):
+    if not load_tweet_page(tweet_page, tweet_url, target_status_id, log_callback, page_timeout=page_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event, recovery_config=recovery_config):
         log_warn(log_callback, f"跳过：推文页面一直卡在 X 启动页或未渲染正文：{tweet_url}")
         return None
 
@@ -351,7 +354,7 @@ def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_ca
         return None
 
     view_text, view_value = extract_view_count(article)
-    followers = extract_followers_count(profile_page, author["profile_url"], page_timeout=page_timeout, stop_event=stop_event)
+    followers = extract_followers_count(profile_page, author["profile_url"], page_timeout=page_timeout, stop_event=stop_event, recovery_config=recovery_config, log_callback=log_callback)
 
     bio = extract_bio(profile_page)
 
@@ -366,7 +369,7 @@ def extract_tweet_author_record(tweet_page, profile_page, tweet_url: str, log_ca
         "_view_value": view_value,
     }
 
-def extract_profile_record(profile_page, profile_url: str, log_callback, page_timeout=None, stop_event=None, needs_navigation=True) -> dict | None:
+def extract_profile_record(profile_page, profile_url: str, log_callback, page_timeout=None, stop_event=None, needs_navigation=True, recovery_config=None) -> dict | None:
     """Extract profile info from a profile page, optionally navigating first."""
     profile_url = normalize_x_url(profile_url)
     if needs_navigation:
@@ -382,6 +385,7 @@ def extract_profile_record(profile_page, profile_url: str, log_callback, page_ti
         page_timeout=page_timeout if page_timeout is not None else PAGE_LOAD_TIMEOUT,
         stop_event=stop_event,
         context_label="X 作者主页",
+        recovery_config=recovery_config,
     ):
         return None
 
@@ -419,7 +423,7 @@ def extract_profile_record(profile_page, profile_url: str, log_callback, page_ti
         pass
 
     # Extract followers count
-    followers = extract_followers_count(profile_page, profile_url, page_timeout=page_timeout, stop_event=stop_event, needs_navigation=False)
+    followers = extract_followers_count(profile_page, profile_url, page_timeout=page_timeout, stop_event=stop_event, needs_navigation=False, recovery_config=recovery_config, log_callback=log_callback)
 
     # Extract bio
     bio = extract_bio(profile_page)
@@ -516,14 +520,15 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                         stop_event=stop_event,
                         pause_event=pause_event,
                         initial_delay=2.0,
+                        recovery_config=config,
                     ):
-                        record = extract_profile_record(profile_page, link, log_callback, page_timeout=page_load_timeout, stop_event=stop_event, needs_navigation=False)
+                        record = extract_profile_record(profile_page, link, log_callback, page_timeout=page_load_timeout, stop_event=stop_event, needs_navigation=False, recovery_config=config)
                     else:
                         log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{link}")
                         record = None
                 else:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理推文：{link}")
-                    record = extract_tweet_author_record(tweet_page, profile_page, link, log_callback, page_timeout=page_load_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event)
+                    record = extract_tweet_author_record(tweet_page, profile_page, link, log_callback, page_timeout=page_load_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event, recovery_config=config)
                 
                 if not record:
                     continue

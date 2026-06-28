@@ -149,7 +149,7 @@ def _wait_for_exact_profile_result(page, username: str, timeout_ms: int) -> bool
             return False
 
 
-def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=None, pause_event=None, log_callback=None) -> bool:
+def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=None, pause_event=None, log_callback=None, recovery_config=None) -> bool:
     deadline = time.monotonic() + max(1.0, float(timeout_ms or 1000) / 1000.0)
     while time.monotonic() < deadline:
         if should_stop(stop_event):
@@ -164,6 +164,7 @@ def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=N
                 stop_event=stop_event,
                 pause_event=pause_event,
                 context_label=f"作者主页 @{username}",
+                recovery_config=recovery_config,
             ):
                 return False
             try:
@@ -203,6 +204,7 @@ def navigate_to_profile_via_search(
     stop_event=None,
     pause_event=None,
     initial_delay=None,
+    recovery_config=None,
 ) -> bool:
     """Enter a profile by searching the handle and clicking the user result."""
     if page_timeout is None:
@@ -232,6 +234,7 @@ def navigate_to_profile_via_search(
         stop_event=stop_event,
         pause_event=pause_event,
         context_label="X 搜索页",
+        recovery_config=recovery_config,
     ):
         return False
 
@@ -259,6 +262,7 @@ def navigate_to_profile_via_search(
             stop_event=stop_event,
             pause_event=pause_event,
             context_label="X 搜索页",
+            recovery_config=recovery_config,
         ):
             return False
 
@@ -285,6 +289,7 @@ def navigate_to_profile_via_search(
                 stop_event=stop_event,
                 pause_event=pause_event,
                 log_callback=log_callback,
+                recovery_config=recovery_config,
             ):
                 return True
             log_warn(log_callback, f"  搜索结果已点击但主页尚未稳定，重试：@{username}")
@@ -303,6 +308,7 @@ def navigate_to_profile_via_search(
                     stop_event=stop_event,
                     pause_event=pause_event,
                     context_label="X 搜索页",
+                    recovery_config=recovery_config,
                 ):
                     return False
                 interruptible_sleep(max(1.0, float(initial_delay)), stop_event)
@@ -557,6 +563,7 @@ def collect_profile_tweets(
     page_already_loaded: bool = False,
     date_window_size: int = 20,
     include_reposts: bool = True,
+    recovery_config=None,
 ) -> list[dict[str, str]] | tuple[list[dict[str, str]], int, int]:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
@@ -620,6 +627,7 @@ def collect_profile_tweets(
                 stop_event=stop_event,
                 pause_event=pause_event,
                 initial_delay=initial_load_delay,
+                recovery_config=recovery_config,
             ):
                 raise RuntimeError(f"未能通过搜索页进入作者主页：{profile_url}")
             if not wait_for_x_page_recovery(
@@ -629,6 +637,7 @@ def collect_profile_tweets(
                 stop_event=stop_event,
                 pause_event=pause_event,
                 context_label=f"作者主页 @{username}",
+                recovery_config=recovery_config,
             ):
                 raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
@@ -641,6 +650,7 @@ def collect_profile_tweets(
                 stop_event=stop_event,
                 pause_event=pause_event,
                 context_label=f"作者主页 @{username}",
+                recovery_config=recovery_config,
             ):
                 raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             # 页面已由调用方加载，只需等待渲染完成
@@ -674,6 +684,7 @@ def collect_profile_tweets(
             stop_event=stop_event,
             pause_event=pause_event,
             context_label=f"作者主页 @{username}",
+            recovery_config=recovery_config,
         ):
             break
 
@@ -995,6 +1006,7 @@ def run_x_profile_tweets_spider(
                         stop_event=stop_event,
                         pause_event=pause_event,
                         initial_delay=initial_load_delay_val,
+                        recovery_config=config,
                     ):
                         log_warn(log_callback, f"  跳过：未能通过搜索页进入作者主页：{profile_url}")
                         continue
@@ -1002,7 +1014,36 @@ def run_x_profile_tweets_spider(
                         log_line(log_callback, "  已忽略补充关键词：主页推文采集现在只取最新作品样本。")
 
                     _, row_offset, written_count = collect_profile_tweets(
-                        page, detail_page, profile_url, max_scrolls, limit_time_bool, start_dt, end_dt, get_comments_bool, max_comments_val, log_callback, stop_event, writer=writer, row_offset=row_offset, page_timeout=page_load_timeout_val, scroll_delay_min=scroll_delay_min_val, scroll_delay_max=scroll_delay_max_val, no_new_scroll_limit=no_new_scroll_limit_val, save_batch_size=save_batch_size_val, cooldown_min=cooldown_min_val, cooldown_max=cooldown_max_val, scroll_px=scroll_px_val, initial_load_delay=initial_load_delay_val, pause_event=pause_event, keyword=None, max_collect=max_tweets_per_author, consecutive_date_limit=consecutive_date_limit_val, guarantee_min_scrolls=guarantee_min_scrolls_val, page_already_loaded=True, date_window_size=date_window_size
+                        page,
+                        detail_page,
+                        profile_url,
+                        max_scrolls,
+                        limit_time_bool,
+                        start_dt,
+                        end_dt,
+                        get_comments_bool,
+                        max_comments_val,
+                        log_callback,
+                        stop_event,
+                        writer=writer,
+                        row_offset=row_offset,
+                        page_timeout=page_load_timeout_val,
+                        scroll_delay_min=scroll_delay_min_val,
+                        scroll_delay_max=scroll_delay_max_val,
+                        no_new_scroll_limit=no_new_scroll_limit_val,
+                        save_batch_size=save_batch_size_val,
+                        cooldown_min=cooldown_min_val,
+                        cooldown_max=cooldown_max_val,
+                        scroll_px=scroll_px_val,
+                        initial_load_delay=initial_load_delay_val,
+                        pause_event=pause_event,
+                        keyword=None,
+                        max_collect=max_tweets_per_author,
+                        consecutive_date_limit=consecutive_date_limit_val,
+                        guarantee_min_scrolls=guarantee_min_scrolls_val,
+                        page_already_loaded=True,
+                        date_window_size=date_window_size,
+                        recovery_config=config,
                     )
                     log_line(log_callback, f"  完成 @{username} 最新推文采集：写入 {written_count} 条帖子。")
                     checkpoint.mark_completed(

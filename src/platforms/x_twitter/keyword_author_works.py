@@ -224,6 +224,7 @@ def collect_seed_authors(
     slice_days: int = 7,
     search_refresh_count: int = 3,
     search_refresh_interval: float = 5.0,
+    recovery_config=None,
 ) -> dict[str, AuthorSeed]:
     authors: dict[str, AuthorSeed] = {}
     seen_tweets: set[str] = set()
@@ -273,6 +274,7 @@ def collect_seed_authors(
                 stop_event=stop_event,
                 pause_event=pause_event,
                 context_label="X 关键词搜索页",
+                recovery_config=recovery_config,
             ):
                 break
             if interruptible_sleep(4.0, stop_event):
@@ -301,6 +303,7 @@ def collect_seed_authors(
                     stop_event=stop_event,
                     pause_event=pause_event,
                     context_label="X 关键词搜索页",
+                    recovery_config=recovery_config,
                 ):
                     break
 
@@ -430,6 +433,7 @@ def run_x_keyword_author_works_spider(
                 slice_days=slice_days,
                 search_refresh_count=search_refresh_count,
                 search_refresh_interval=search_refresh_interval,
+                recovery_config=config,
             )
             if not authors:
                 log_warn(log_callback, "没有从关键词结果中发现有效作者。")
@@ -466,6 +470,7 @@ def run_x_keyword_author_works_spider(
                     stop_event=stop_event,
                     pause_event=pause_event,
                     initial_delay=initial_load_delay,
+                    recovery_config=config,
                 )
                 extracted_profile = (
                     extract_profile_record(
@@ -475,6 +480,7 @@ def run_x_keyword_author_works_spider(
                         page_timeout=page_timeout,
                         stop_event=stop_event,
                         needs_navigation=False,
+                        recovery_config=config,
                     )
                     if profile_ready
                     else None
@@ -497,6 +503,7 @@ def run_x_keyword_author_works_spider(
                         stop_event=stop_event,
                         pause_event=pause_event,
                         initial_delay=initial_load_delay,
+                        recovery_config=config,
                     ):
                         raise RuntimeError("未能通过搜索页进入作者主页")
                     works = collect_profile_tweets(
@@ -522,6 +529,7 @@ def run_x_keyword_author_works_spider(
                         initial_load_delay=initial_load_delay,
                         page_already_loaded=True,
                         include_reposts=False,
+                        recovery_config=config,
                     )
                     works_collected_ok = True
                 except Exception as exc:

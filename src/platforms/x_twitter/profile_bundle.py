@@ -241,6 +241,7 @@ def run_x_profile_bundle_spider(
                         stop_event=stop_event,
                         pause_event=pause_event,
                         initial_delay=initial_load_delay,
+                        recovery_config=config,
                     )
                     if not profile_ready:
                         log_warn(log_callback, f"  未能通过搜索页进入作者主页，使用链接兜底：{profile_url}")
@@ -253,6 +254,7 @@ def run_x_profile_bundle_spider(
                             page_timeout=page_timeout,
                             stop_event=stop_event,
                             needs_navigation=False,
+                            recovery_config=config,
                         )
                         profile_record_ok = bool(extracted_profile)
                         profile_record = extracted_profile or _fallback_profile_record(profile_url)
@@ -290,6 +292,7 @@ def run_x_profile_bundle_spider(
                         page_already_loaded=True,
                         date_window_size=date_window_size,
                         include_reposts=include_reposts,
+                        recovery_config=config,
                     )
                     tweets_collected_ok = True
                 except Exception as exc:
