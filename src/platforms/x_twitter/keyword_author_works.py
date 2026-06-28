@@ -460,8 +460,12 @@ def run_x_keyword_author_works_spider(
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_successfully_completed(seed.profile_url, positive_count_fields=("works_count",)):
-                    log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
+                claimed, claim_status = checkpoint.claim_item(seed.profile_url, positive_count_fields=("works_count",))
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 双开分流跳过正在处理的作者：{seed.profile_url}")
+                    else:
+                        log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入作者主页：{seed.profile_url}")
                 profile_ready = navigate_to_profile(
@@ -546,6 +550,7 @@ def run_x_keyword_author_works_spider(
                         {"output_path": output_path, "index": index, "works_count": len(works)},
                     )
                 else:
+                    checkpoint.release_item(seed.profile_url)
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 log_line(log_callback, f"  写入作者：{profile_record.get('账号ID') or seed.account_id or seed.profile_url}，作品 {len(works)} 条。")
 

@@ -377,8 +377,12 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_successfully_completed(profile_url, positive_count_fields=("profile_ok",)):
-                    log_line(log_callback, f"[{index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
+                claimed, claim_status = checkpoint.claim_item(profile_url, positive_count_fields=("profile_ok",))
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{index}/{len(profile_urls)}] 双开分流跳过正在处理的博主：{profile_url}")
+                    else:
+                        log_line(log_callback, f"[{index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{len(profile_urls)}] 提取博主信息：{profile_url}")
                 profile_ok = False
@@ -400,6 +404,7 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                 if profile_ok:
                     checkpoint.mark_completed(profile_url, {"output_path": output_path, "index": index, "profile_ok": 1})
                 else:
+                    checkpoint.release_item(profile_url)
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 # 每抓取 5 个博主主页进行随机冷却，以避免触发高频风控限制
                 if index % cooldown_every_val == 0:

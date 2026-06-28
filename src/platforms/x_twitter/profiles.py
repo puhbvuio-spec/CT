@@ -507,8 +507,12 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_completed(link):
-                    log_line(log_callback, f"[{index}/{len(links)}] 断点续跑跳过已完成链接：{link}")
+                claimed, claim_status = checkpoint.claim_item(link)
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{index}/{len(links)}] 双开分流跳过正在处理的链接：{link}")
+                    else:
+                        log_line(log_callback, f"[{index}/{len(links)}] 断点续跑跳过已完成链接：{link}")
                     continue
                 
                 if is_profile_mode:
@@ -533,6 +537,7 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                     record = extract_tweet_author_record(tweet_page, profile_page, link, log_callback, page_timeout=page_load_timeout, tweet_ready_timeout=tweet_ready_timeout, stop_event=stop_event, recovery_config=config)
                 
                 if not record:
+                    checkpoint.release_item(link)
                     continue
 
                 account_key = record["账号ID"].lower()

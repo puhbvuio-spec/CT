@@ -227,8 +227,12 @@ def run_x_profile_bundle_spider(
                     break
 
                 profile_url = normalize_x_url(profile_url)
-                if checkpoint.is_successfully_completed(profile_url, positive_count_fields=("tweet_count",)):
-                    log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
+                claimed, claim_status = checkpoint.claim_item(profile_url, positive_count_fields=("tweet_count",))
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{profile_index}/{total_profiles}] 双开分流跳过正在处理的博主：{profile_url}")
+                    else:
+                        log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 采集博主信息与推文：{profile_url}")
 
@@ -316,6 +320,7 @@ def run_x_profile_bundle_spider(
                         {"output_path": output_path, "profile_index": profile_index, "tweet_count": len(tweets)},
                     )
                 else:
+                    checkpoint.release_item(profile_url)
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
 
         completed_path = output_path

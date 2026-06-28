@@ -1067,8 +1067,12 @@ def run_x_profile_tweets_spider(
 
                 profile_index += 1
                 username = extract_profile_username(profile_url)
-                if checkpoint.is_completed(profile_url):
-                    log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
+                claimed, claim_status = checkpoint.claim_item(profile_url)
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{profile_index}/{total_profiles}] 双开分流跳过正在处理的博主：{profile_url}")
+                    else:
+                        log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 开始处理博主主页：{profile_url}")
                 
@@ -1085,6 +1089,7 @@ def run_x_profile_tweets_spider(
                         use_search_entry=search_entry_enabled,
                     ):
                         log_warn(log_callback, f"  跳过：未能进入作者主页：{profile_url}")
+                        checkpoint.release_item(profile_url)
                         continue
                     if keyword_list:
                         log_line(log_callback, "  已忽略补充关键词：主页推文采集现在只取最新作品样本。")
@@ -1129,8 +1134,10 @@ def run_x_profile_tweets_spider(
 
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  跳过：页面加载超时，请确认链接可打开且账号已登录。")
+                    checkpoint.release_item(profile_url)
                 except Exception as exc:
                     log_warn(log_callback, f"  跳过：{exc}")
+                    checkpoint.release_item(profile_url)
 
             if page is not None and not page.is_closed():
                 page.close()

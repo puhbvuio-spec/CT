@@ -854,8 +854,12 @@ def run_tiktok_profile_videos_spider(
                 if not profile_url:
                     log_warn(log_callback, f"[{profile_index}/{len(profile_urls)}] 跳过无效主页：{raw_profile_url}")
                     continue
-                if checkpoint.is_completed(profile_url):
-                    log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
+                claimed, claim_status = checkpoint.claim_item(profile_url)
+                if not claimed:
+                    if claim_status == "active":
+                        log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 双开分流跳过正在处理的博主：{profile_url}")
+                    else:
+                        log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
 
                 log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 读取主页：{profile_url}")
@@ -883,6 +887,7 @@ def run_tiktok_profile_videos_spider(
                     interruptible_sleep(2.5, stop_event)
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  主页加载超时，跳过。")
+                    checkpoint.release_item(profile_url)
                     continue
 
                 seen_links: set[str] = set()
@@ -1006,6 +1011,8 @@ def run_tiktok_profile_videos_spider(
                             "processed_count": processed_count,
                         },
                     )
+                else:
+                    checkpoint.release_item(profile_url)
 
             if fetch_play_counts_bool:
                 try:

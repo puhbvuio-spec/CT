@@ -7,6 +7,9 @@ import json
 import os
 import shutil
 import time
+import uuid
+import atexit
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,8 @@ def task_fingerprint(tool_id: str, scope: dict[str, Any]) -> str:
 
 
 _MIGRATED_CHECKPOINT_PAIRS: set[tuple[str, str]] = set()
+_LOCK_STALE_SECONDS = 12 * 60 * 60
+_ACTIVE_RUN_TTL_SECONDS = 12 * 60 * 60
 
 
 def _copy_missing_tree(src: Path, dst: Path) -> None:
@@ -86,9 +91,46 @@ def checkpoint_root() -> Path:
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _timestamp() -> float:
+    return time.time()
+
+
+@contextmanager
+def _path_lock(path: Path, timeout: float = 10.0):
+    lock_dir = path.with_suffix(path.suffix + ".lock")
+    deadline = time.monotonic() + max(0.1, float(timeout or 0.1))
+    lock_acquired = False
+    while not lock_acquired:
+        try:
+            lock_dir.mkdir(parents=True)
+            lock_acquired = True
+            try:
+                (lock_dir / "owner.json").write_text(
+                    json.dumps({"pid": os.getpid(), "created_at": _now()}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+        except FileExistsError:
+            try:
+                age = _timestamp() - lock_dir.stat().st_mtime
+                if age > _LOCK_STALE_SECONDS:
+                    shutil.rmtree(lock_dir, ignore_errors=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Checkpoint lock timeout: {path}")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
 
 
 def save_tool_inputs(tool_id: str, values: dict[str, Any]) -> None:
@@ -123,6 +165,8 @@ class TaskCheckpoint:
         self.scope = _jsonable(scope)
         self.fingerprint = task_fingerprint(tool_id, self.scope)
         self.path = checkpoint_root() / "tasks" / _safe_name(tool_id) / f"{self.fingerprint}.json"
+        self.run_id = f"{os.getpid()}-{uuid.uuid4().hex[:10]}"
+        self._closed = False
         self.data = self._load()
 
     def _load(self) -> dict[str, Any]:
@@ -141,22 +185,111 @@ class TaskCheckpoint:
             "created_at": _now(),
             "updated_at": _now(),
             "completed": {},
+            "active": {},
+            "active_runs": {},
             "output_paths": [],
         }
 
-    @property
-    def completed(self) -> dict[str, Any]:
-        completed = self.data.setdefault("completed", {})
-        return completed if isinstance(completed, dict) else {}
+    def _refresh(self) -> None:
+        self.data = self._load()
+        self._prune_runtime_state(self.data)
 
-    def completed_count(self) -> int:
-        return len(self.completed)
+    def _prune_runtime_state(self, data: dict[str, Any]) -> bool:
+        changed = False
+        now_ts = _timestamp()
+        active_runs = data.setdefault("active_runs", {})
+        if not isinstance(active_runs, dict):
+            active_runs = {}
+            data["active_runs"] = active_runs
+            changed = True
+        for run_id, info in list(active_runs.items()):
+            if not isinstance(info, dict):
+                active_runs.pop(run_id, None)
+                changed = True
+                continue
+            try:
+                updated_ts = float(info.get("updated_ts", 0) or 0)
+            except (TypeError, ValueError):
+                updated_ts = 0.0
+            if updated_ts and now_ts - updated_ts > _ACTIVE_RUN_TTL_SECONDS:
+                active_runs.pop(run_id, None)
+                changed = True
 
-    def is_completed(self, key: str) -> bool:
-        return str(key).strip().lower() in self.completed
+        active = data.setdefault("active", {})
+        if not isinstance(active, dict):
+            active = {}
+            data["active"] = active
+            changed = True
+        for key, info in list(active.items()):
+            if not isinstance(info, dict):
+                active.pop(key, None)
+                changed = True
+                continue
+            run_id = str(info.get("run_id") or "")
+            try:
+                updated_ts = float(info.get("updated_ts", 0) or 0)
+            except (TypeError, ValueError):
+                updated_ts = 0.0
+            if run_id not in active_runs or (updated_ts and now_ts - updated_ts > _ACTIVE_RUN_TTL_SECONDS):
+                active.pop(key, None)
+                changed = True
+        return changed
 
-    def is_successfully_completed(self, key: str, positive_count_fields: tuple[str, ...] = ()) -> bool:
-        entry = self.completed.get(str(key).strip().lower())
+    def _write_locked(self, data: dict[str, Any]) -> None:
+        data["updated_at"] = _now()
+        _atomic_write(self.path, data)
+        self.data = data
+
+    def register_run(self) -> None:
+        with _path_lock(self.path):
+            data = self._load()
+            self._prune_runtime_state(data)
+            active_runs = data.setdefault("active_runs", {})
+            active_runs[self.run_id] = {
+                "pid": os.getpid(),
+                "started_at": _now(),
+                "updated_at": _now(),
+                "updated_ts": _timestamp(),
+            }
+            self._write_locked(data)
+        atexit.register(self.close_run)
+
+    def close_run(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            with _path_lock(self.path, timeout=2.0):
+                data = self._load()
+                active_runs = data.setdefault("active_runs", {})
+                if isinstance(active_runs, dict):
+                    active_runs.pop(self.run_id, None)
+                active = data.setdefault("active", {})
+                if isinstance(active, dict):
+                    for key, info in list(active.items()):
+                        if isinstance(info, dict) and info.get("run_id") == self.run_id:
+                            active.pop(key, None)
+                self._write_locked(data)
+        except Exception:
+            pass
+
+    def active_other_run_count(self) -> int:
+        with _path_lock(self.path):
+            data = self._load()
+            changed = self._prune_runtime_state(data)
+            if changed:
+                self._write_locked(data)
+            else:
+                self.data = data
+        active_runs = self.data.get("active_runs", {})
+        if not isinstance(active_runs, dict):
+            return 0
+        return len([run_id for run_id in active_runs if run_id != self.run_id])
+
+    def has_other_active_runs(self) -> bool:
+        return self.active_other_run_count() > 0
+
+    def _entry_is_successful(self, entry: Any, positive_count_fields: tuple[str, ...] = ()) -> bool:
         if not isinstance(entry, dict):
             return False
         if entry.get("status") == "completed":
@@ -172,26 +305,95 @@ class TaskCheckpoint:
             return False
         return bool(entry.get("completed_at"))
 
+    @property
+    def completed(self) -> dict[str, Any]:
+        completed = self.data.setdefault("completed", {})
+        return completed if isinstance(completed, dict) else {}
+
+    def completed_count(self) -> int:
+        self._refresh()
+        return len(self.completed)
+
+    def is_completed(self, key: str) -> bool:
+        self._refresh()
+        return str(key).strip().lower() in self.completed
+
+    def is_successfully_completed(self, key: str, positive_count_fields: tuple[str, ...] = ()) -> bool:
+        self._refresh()
+        entry = self.completed.get(str(key).strip().lower())
+        return self._entry_is_successful(entry, positive_count_fields=positive_count_fields)
+
+    def claim_item(self, key: str, positive_count_fields: tuple[str, ...] = ()) -> tuple[bool, str]:
+        normalized = str(key).strip().lower()
+        if not normalized:
+            return False, "empty"
+        with _path_lock(self.path):
+            data = self._load()
+            self._prune_runtime_state(data)
+            completed = data.setdefault("completed", {})
+            if self._entry_is_successful(completed.get(normalized), positive_count_fields=positive_count_fields):
+                self._write_locked(data)
+                return False, "completed"
+            active = data.setdefault("active", {})
+            current = active.get(normalized)
+            if isinstance(current, dict) and current.get("run_id") != self.run_id:
+                self._write_locked(data)
+                return False, "active"
+            active[normalized] = {
+                "status": "running",
+                "run_id": self.run_id,
+                "pid": os.getpid(),
+                "claimed_at": _now(),
+                "updated_at": _now(),
+                "updated_ts": _timestamp(),
+            }
+            self._write_locked(data)
+            return True, "claimed"
+
+    def release_item(self, key: str) -> None:
+        normalized = str(key).strip().lower()
+        if not normalized:
+            return
+        with _path_lock(self.path):
+            data = self._load()
+            active = data.setdefault("active", {})
+            current = active.get(normalized)
+            if isinstance(current, dict) and current.get("run_id") == self.run_id:
+                active.pop(normalized, None)
+            self._write_locked(data)
+
     def mark_completed(self, key: str, meta: dict[str, Any] | None = None) -> None:
         normalized = str(key).strip().lower()
         if not normalized:
             return
-        self.completed[normalized] = {
-            "status": "completed",
-            "completed_at": _now(),
-            "meta": _jsonable(meta or {}),
-        }
-        self.save()
+        with _path_lock(self.path):
+            data = self._load()
+            self._prune_runtime_state(data)
+            completed = data.setdefault("completed", {})
+            completed[normalized] = {
+                "status": "completed",
+                "completed_at": _now(),
+                "meta": _jsonable(meta or {}),
+            }
+            active = data.setdefault("active", {})
+            active.pop(normalized, None)
+            self._write_locked(data)
 
     def add_output_path(self, output_path: str | None) -> None:
         if not output_path:
             return
-        paths = self.data.setdefault("output_paths", [])
-        if output_path not in paths:
-            paths.append(output_path)
-            self.save()
+        with _path_lock(self.path):
+            data = self._load()
+            paths = data.setdefault("output_paths", [])
+            if not isinstance(paths, list):
+                paths = []
+                data["output_paths"] = paths
+            if output_path not in paths:
+                paths.append(output_path)
+            self._write_locked(data)
 
     def latest_output_path(self) -> str | None:
+        self._refresh()
         paths = self.data.get("output_paths", [])
         if not isinstance(paths, list):
             return None
@@ -270,8 +472,30 @@ class TaskCheckpoint:
         return True
 
     def save(self) -> None:
-        self.data["updated_at"] = _now()
-        _atomic_write(self.path, self.data)
+        with _path_lock(self.path):
+            latest = self._load()
+            merged = dict(latest)
+            merged["tool_id"] = self.tool_id
+            merged["fingerprint"] = self.fingerprint
+            merged["scope"] = self.scope
+            merged.setdefault("created_at", self.data.get("created_at", _now()))
+            completed = merged.setdefault("completed", {})
+            if isinstance(self.data.get("completed"), dict):
+                completed.update(self.data["completed"])
+            output_paths = merged.setdefault("output_paths", [])
+            if not isinstance(output_paths, list):
+                output_paths = []
+                merged["output_paths"] = output_paths
+            for output_path in self.data.get("output_paths", []) or []:
+                if output_path and output_path not in output_paths:
+                    output_paths.append(output_path)
+            active_runs = merged.setdefault("active_runs", {})
+            if isinstance(self.data.get("active_runs"), dict):
+                active_runs.update(self.data["active_runs"])
+            active = merged.setdefault("active", {})
+            if isinstance(self.data.get("active"), dict):
+                active.update(self.data["active"])
+            self._write_locked(merged)
 
 
 def open_task_checkpoint(
@@ -282,7 +506,9 @@ def open_task_checkpoint(
     merge_keep_keys: tuple[str, ...] = (),
 ) -> TaskCheckpoint:
     checkpoint = TaskCheckpoint(tool_id, scope)
+    checkpoint.register_run()
     merged_count = checkpoint.merge_compatible_siblings(merge_on_keys, merge_keep_keys) if merge_on_keys else 0
+    other_runs = checkpoint.active_other_run_count()
     if checkpoint.completed_count():
         try:
             scope_note = _scope_count_note(checkpoint.scope)
@@ -292,6 +518,11 @@ def open_task_checkpoint(
             )
             if merged_count:
                 log_callback(f"断点续跑：已从旧参数任务合并 {merged_count} 条历史记录。")
+        except Exception:
+            pass
+    if other_runs:
+        try:
+            log_callback(f"断点续跑：检测到同一输入任务还有 {other_runs} 个窗口在运行，本窗口将按输入项自动分流领取。")
         except Exception:
             pass
     return checkpoint
@@ -321,7 +552,8 @@ def open_checkpointed_row_writer(
     if writer_class is None:
         from src.core.xlsx import XlsxRowWriter as writer_class
 
-    resume_path = checkpoint.latest_output_path()
+    concurrent = checkpoint.has_other_active_runs()
+    resume_path = None if concurrent else checkpoint.latest_output_path()
     if resume_path:
         try:
             writer = writer_class(resume_path, fieldnames, append=True, **kwargs)
@@ -329,8 +561,11 @@ def open_checkpointed_row_writer(
             return resume_path, writer
         except Exception as exc:
             _log_new_output(log_callback, exc)
-    writer = writer_class(default_output_path, fieldnames, **kwargs)
-    return default_output_path, writer
+    output_path = _output_path_for_current_run(default_output_path, checkpoint, force_run_suffix=concurrent)
+    if concurrent:
+        _log_concurrent_output(log_callback, output_path)
+    writer = writer_class(output_path, fieldnames, **kwargs)
+    return output_path, writer
 
 
 def open_checkpointed_multi_sheet_writer(
@@ -342,7 +577,8 @@ def open_checkpointed_multi_sheet_writer(
 ):
     from src.core.xlsx import MultiSheetXlsxWriter
 
-    resume_path = checkpoint.latest_output_path()
+    concurrent = checkpoint.has_other_active_runs()
+    resume_path = None if concurrent else checkpoint.latest_output_path()
     if resume_path:
         try:
             writer = MultiSheetXlsxWriter(resume_path, sheets_fields, append=True, **kwargs)
@@ -350,8 +586,24 @@ def open_checkpointed_multi_sheet_writer(
             return resume_path, writer
         except Exception as exc:
             _log_new_output(log_callback, exc)
-    writer = MultiSheetXlsxWriter(default_output_path, sheets_fields, **kwargs)
-    return default_output_path, writer
+    output_path = _output_path_for_current_run(default_output_path, checkpoint, force_run_suffix=concurrent)
+    if concurrent:
+        _log_concurrent_output(log_callback, output_path)
+    writer = MultiSheetXlsxWriter(output_path, sheets_fields, **kwargs)
+    return output_path, writer
+
+
+def _output_path_for_current_run(default_output_path: str, checkpoint: TaskCheckpoint, force_run_suffix: bool = False) -> str:
+    path = Path(default_output_path)
+    if force_run_suffix:
+        path = path.with_name(f"{path.stem}_run_{_safe_name(checkpoint.run_id)[-8:]}{path.suffix}")
+    if not path.exists():
+        return str(path)
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
+        if not candidate.exists():
+            return str(candidate)
+    return str(path.with_name(f"{path.stem}_{uuid.uuid4().hex[:8]}{path.suffix}"))
 
 
 def _log_resume_output(log_callback, output_path: str) -> None:
@@ -364,5 +616,12 @@ def _log_resume_output(log_callback, output_path: str) -> None:
 def _log_new_output(log_callback, exc: Exception) -> None:
     try:
         log_callback(f"断点续跑：上次输出文件无法追加，将新建输出文件。原因：{exc}")
+    except Exception:
+        pass
+
+
+def _log_concurrent_output(log_callback, output_path: str) -> None:
+    try:
+        log_callback(f"断点续跑：双开分流模式，本窗口写入独立输出文件：{output_path}")
     except Exception:
         pass

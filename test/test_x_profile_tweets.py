@@ -17,14 +17,25 @@ from src.platforms.x_twitter.windows import XProfileTweetsWindow, _x_cdp_url, _x
 
 
 class DummyCheckpoint:
+    run_id = "dummy-run"
+
     def latest_output_path(self):
         return None
+
+    def has_other_active_runs(self):
+        return False
 
     def add_output_path(self, output_path):
         pass
 
     def is_completed(self, key):
         return False
+
+    def claim_item(self, key, positive_count_fields=()):
+        return True, "claimed"
+
+    def release_item(self, key):
+        pass
 
     def mark_completed(self, key, meta=None):
         pass

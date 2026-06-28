@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from src.core.task_checkpoint import (
     load_tool_inputs,
+    open_checkpointed_row_writer,
     open_task_checkpoint,
     save_tool_inputs,
     task_fingerprint,
@@ -118,6 +119,49 @@ class TestTaskCheckpoint(unittest.TestCase):
                 self.assertTrue(new_checkpoint.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
                 self.assertIn("已从旧参数任务合并 1 条历史记录", "\n".join(messages))
                 self.assertEqual(new_checkpoint.latest_output_path(), str(old_output_path))
+
+    def test_parallel_checkpoints_claim_inputs_without_overlap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with _patched_checkpoint_roots(tmp):
+                first = open_task_checkpoint("tool_parallel", {"profile_urls": ["A", "B"]})
+                second = open_task_checkpoint("tool_parallel", {"profile_urls": ["A", "B"]})
+
+                self.assertEqual(first.claim_item("A"), (True, "claimed"))
+                self.assertEqual(second.claim_item("A"), (False, "active"))
+                self.assertEqual(second.claim_item("B"), (True, "claimed"))
+
+                first.mark_completed("A", {"row": 1})
+                second.mark_completed("B", {"row": 2})
+
+                reloaded = open_task_checkpoint("tool_parallel", {"profile_urls": ["A", "B"]})
+                self.assertTrue(reloaded.is_completed("A"))
+                self.assertTrue(reloaded.is_completed("B"))
+                self.assertEqual(reloaded.completed_count(), 2)
+                first.close_run()
+                second.close_run()
+                reloaded.close_run()
+
+    def test_parallel_outputs_use_separate_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with _patched_checkpoint_roots(tmp):
+                first = open_task_checkpoint("tool_parallel_output", {"profile_urls": ["A", "B"]})
+                second = open_task_checkpoint("tool_parallel_output", {"profile_urls": ["A", "B"]})
+                default_output_path = str(Path(tmp) / "rows.xlsx")
+
+                first_path, first_writer = open_checkpointed_row_writer(first, default_output_path, ["name"])
+                first.add_output_path(first_path)
+                second_path, second_writer = open_checkpointed_row_writer(second, default_output_path, ["name"])
+                second.add_output_path(second_path)
+                first_writer.writerow({"name": "first"})
+                second_writer.writerow({"name": "second"})
+                first_writer.save()
+                second_writer.save()
+
+                self.assertNotEqual(first_path, second_path)
+                self.assertTrue(Path(first_path).exists())
+                self.assertTrue(Path(second_path).exists())
+                first.close_run()
+                second.close_run()
 
     def test_xlsx_row_writer_can_append_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
