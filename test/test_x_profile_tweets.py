@@ -7,8 +7,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from src.platforms.x_twitter.profile_tweets import (
     DEFAULT_PROFILE_TWEET_LIMIT,
+    XTransientProfileSkipped,
     build_profile_search_url,
     collect_profile_tweets,
+    handle_empty_profile_tweets_recovery,
+    make_x_transient_skip_state,
     normalize_scroll_delay_range,
     run_x_profile_tweets_spider,
     use_profile_search_entry,
@@ -104,9 +107,9 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         mock_recovery.assert_not_called()
 
     @patch("src.platforms.x_twitter.profile_tweets.interruptible_sleep", return_value=False)
-    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery", return_value=True)
+    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery")
     @patch("src.platforms.x_twitter.profile_tweets.extract_visible_profile_tweets", return_value=[])
-    def test_recovery_is_triggered_only_after_empty_tweet_extract(self, mock_extract, mock_recovery, mock_sleep):
+    def test_empty_tweets_without_x_error_do_not_trigger_recovery(self, mock_extract, mock_recovery, mock_sleep):
         page = MagicMock()
         page.wait_for_selector.return_value = None
         page.locator.return_value.all.return_value = []
@@ -128,7 +131,66 @@ class TestXProfileTweetsLogic(unittest.TestCase):
         )
 
         self.assertEqual(tweets, [])
-        mock_recovery.assert_called()
+        mock_recovery.assert_not_called()
+
+    @patch("src.platforms.x_twitter.profile_tweets.check_network_reachable", return_value=(True, "HTTP 204"))
+    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery")
+    @patch("src.platforms.x_twitter.profile_tweets.extract_visible_profile_tweets", return_value=[])
+    def test_transient_x_error_defers_profile_once(self, mock_extract, mock_recovery, mock_network):
+        page = MagicMock()
+        page.wait_for_selector.return_value = None
+        page.locator.return_value.all.return_value = []
+        page.evaluate.return_value = "Something went wrong. Try reloading."
+
+        with self.assertRaises(XTransientProfileSkipped) as raised:
+            collect_profile_tweets(
+                page,
+                None,
+                "https://x.com/demo",
+                max_scrolls=1,
+                limit_time_bool=False,
+                start_dt=None,
+                end_dt=None,
+                get_comments_bool=False,
+                max_comments=0,
+                log_callback=None,
+                page_timeout=100,
+                page_already_loaded=True,
+                transient_skip_state=make_x_transient_skip_state({"x_transient_skip_before_wait": 2}),
+            )
+
+        self.assertTrue(raised.exception.retry_after_success)
+        mock_network.assert_called()
+        mock_recovery.assert_not_called()
+
+    @patch("src.platforms.x_twitter.profile_tweets.wait_for_x_page_recovery", return_value=True)
+    @patch("src.platforms.x_twitter.profile_tweets.detect_x_transient_error", return_value="Something went wrong")
+    def test_second_transient_skip_waits_and_marks_retry_final(self, mock_detect, mock_recovery):
+        state = make_x_transient_skip_state({"x_transient_skip_before_wait": 2})
+        page = MagicMock()
+
+        with self.assertRaises(XTransientProfileSkipped) as first:
+            handle_empty_profile_tweets_recovery(
+                page,
+                "demo",
+                recovery_config={"x_network_check_enabled": True},
+                transient_skip_state=state,
+                network_checker=lambda _config: (True, "HTTP 204"),
+            )
+        self.assertTrue(first.exception.retry_after_success)
+        mock_recovery.assert_not_called()
+
+        with self.assertRaises(XTransientProfileSkipped) as second:
+            handle_empty_profile_tweets_recovery(
+                page,
+                "demo",
+                recovery_config={"x_network_check_enabled": True},
+                transient_skip_state=state,
+                network_checker=lambda _config: (True, "HTTP 204"),
+                transient_retry=True,
+            )
+        self.assertFalse(second.exception.retry_after_success)
+        mock_recovery.assert_called_once()
 
     def test_x_window_edge_browser_uses_separate_cdp_port(self):
         values = {"browser": "Edge", "max_scrolls": 12}

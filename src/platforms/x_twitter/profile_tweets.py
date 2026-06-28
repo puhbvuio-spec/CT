@@ -28,7 +28,12 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
-from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
+from src.platforms.x_twitter.page_recovery import (
+    check_network_reachable,
+    detect_x_transient_error,
+    resolve_x_page_recovery_config,
+    wait_for_x_page_recovery,
+)
 
 
 def _parse_date_range(start_str: str, end_str: str):
@@ -55,6 +60,7 @@ COOLDOWN_MAX_SECONDS = 15.0
 DEFAULT_CONSECUTIVE_DATE_LIMIT = 3
 DEFAULT_SCROLL_DELAY_MIN = 2.4
 DEFAULT_SCROLL_DELAY_MAX = 5.6
+DEFAULT_X_TRANSIENT_SKIP_BEFORE_WAIT = 2
 
 BLOCKED_PROFILE_NAMES = {
     "home",
@@ -207,6 +213,111 @@ def use_profile_search_entry(config: dict | None) -> bool:
     value = (config or {}).get("profile_entry_mode", "直接打开")
     text = str(value or "").strip().lower()
     return text in {"搜索页进入", "搜索进入", "search", "search_page", "search-page", "是", "true", "1", "yes"}
+
+
+class XTransientProfileSkipped(RuntimeError):
+    """Raised when a profile is skipped after X shows a reload/error page."""
+
+    def __init__(self, message: str, retry_after_success: bool = True) -> None:
+        super().__init__(message)
+        self.retry_after_success = retry_after_success
+
+
+def resolve_x_transient_skip_before_wait(config: dict | None) -> int:
+    try:
+        return max(1, int((config or {}).get("x_transient_skip_before_wait", DEFAULT_X_TRANSIENT_SKIP_BEFORE_WAIT)))
+    except (TypeError, ValueError):
+        return DEFAULT_X_TRANSIENT_SKIP_BEFORE_WAIT
+
+
+def make_x_transient_skip_state(config: dict | None = None) -> dict[str, int]:
+    return {
+        "skip_count": 0,
+        "skip_before_wait": resolve_x_transient_skip_before_wait(config),
+    }
+
+
+def handle_empty_profile_tweets_recovery(
+    page,
+    username: str,
+    log_callback=None,
+    page_timeout=None,
+    stop_event=None,
+    pause_event=None,
+    recovery_config=None,
+    transient_skip_state: dict[str, int] | None = None,
+    network_checker=None,
+    transient_retry: bool = False,
+) -> bool:
+    matched_phrase = detect_x_transient_error(page)
+    if not matched_phrase:
+        return True
+
+    resolved_config = resolve_x_page_recovery_config(recovery_config)
+    checker = network_checker or check_network_reachable
+    if resolved_config.network_check_enabled:
+        network_ok, network_detail = checker(resolved_config)
+        if not network_ok:
+            log_warn(
+                log_callback,
+                f"  @{username} 出现 X 重新加载/风控提示，同时网络检测失败（{network_detail}），按网络问题等待重试。",
+            )
+            return wait_for_x_page_recovery(
+                page,
+                log_callback=log_callback,
+                page_timeout=page_timeout,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                context_label=f"作者主页 @{username}",
+                recovery_config=recovery_config,
+                network_checker=checker,
+            )
+    else:
+        network_detail = "已关闭网络检测"
+
+    if transient_skip_state is None:
+        return wait_for_x_page_recovery(
+            page,
+            log_callback=log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            context_label=f"作者主页 @{username}",
+            recovery_config=recovery_config,
+            network_checker=checker,
+        )
+
+    threshold = max(1, int(transient_skip_state.get("skip_before_wait") or DEFAULT_X_TRANSIENT_SKIP_BEFORE_WAIT))
+    skip_count = int(transient_skip_state.get("skip_count") or 0) + 1
+    transient_skip_state["skip_count"] = skip_count
+    log_warn(
+        log_callback,
+        (
+            f"  @{username} 未能读取到推文，且 X 出现重新加载/风控提示；网络检测正常（{network_detail}）。"
+            f"{'本轮回退补采仍失败，不再回退。' if transient_retry else '先临时跳过，等后续作者采成功后回退补采一次。'}"
+            f"（跳过计数 {skip_count}/{threshold}）"
+        ),
+    )
+
+    if skip_count >= threshold:
+        transient_skip_state["skip_count"] = 0
+        log_warn(log_callback, f"  X 重新加载/风控跳过次数达到 {threshold}，先执行一次恢复等待再继续。")
+        if not wait_for_x_page_recovery(
+            page,
+            log_callback=log_callback,
+            page_timeout=page_timeout,
+            stop_event=stop_event,
+            pause_event=pause_event,
+            context_label=f"作者主页 @{username}",
+            recovery_config=recovery_config,
+            network_checker=checker,
+        ):
+            raise RuntimeError("X 风控恢复等待已停止。")
+
+    raise XTransientProfileSkipped(
+        f"X 重新加载/风控提示：@{username} 已跳过。",
+        retry_after_success=not transient_retry,
+    )
 
 
 def navigate_to_profile_direct(
@@ -634,6 +745,8 @@ def collect_profile_tweets(
     include_reposts: bool = True,
     recovery_config=None,
     use_search_entry: bool = False,
+    transient_skip_state: dict[str, int] | None = None,
+    transient_retry: bool = False,
 ) -> list[dict[str, str]] | tuple[list[dict[str, str]], int, int]:
     if page_timeout is None:
         page_timeout = PAGE_LOAD_TIMEOUT
@@ -704,14 +817,16 @@ def collect_profile_tweets(
             try:
                 page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             except PlaywrightTimeoutError:
-                if not wait_for_x_page_recovery(
+                if not handle_empty_profile_tweets_recovery(
                     page,
+                    username,
                     log_callback=log_callback,
                     page_timeout=page_timeout,
                     stop_event=stop_event,
                     pause_event=pause_event,
-                    context_label=f"作者主页 @{username}",
                     recovery_config=recovery_config,
+                    transient_skip_state=transient_skip_state,
+                    transient_retry=transient_retry,
                 ):
                     raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
                 page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
@@ -721,14 +836,16 @@ def collect_profile_tweets(
             try:
                 page.wait_for_selector('article[data-testid="tweet"], article', timeout=page_timeout)
             except PlaywrightTimeoutError:
-                if not wait_for_x_page_recovery(
+                if not handle_empty_profile_tweets_recovery(
                     page,
+                    username,
                     log_callback=log_callback,
                     page_timeout=page_timeout,
                     stop_event=stop_event,
                     pause_event=pause_event,
-                    context_label=f"作者主页 @{username}",
                     recovery_config=recovery_config,
+                    transient_skip_state=transient_skip_state,
+                    transient_retry=transient_retry,
                 ):
                     raise RuntimeError("X 页面仍处于临时错误/风控等待状态，任务已停止。")
             interruptible_sleep(initial_load_delay, stop_event)
@@ -763,14 +880,16 @@ def collect_profile_tweets(
             
         visible_tweets = extract_visible_profile_tweets(page, username)
         if not visible_tweets:
-            if not wait_for_x_page_recovery(
+            if not handle_empty_profile_tweets_recovery(
                 page,
+                username,
                 log_callback=log_callback,
                 page_timeout=page_timeout,
                 stop_event=stop_event,
                 pause_event=pause_event,
-                context_label=f"作者主页 @{username}",
                 recovery_config=recovery_config,
+                transient_skip_state=transient_skip_state,
+                transient_retry=transient_retry,
             ):
                 break
             visible_tweets = extract_visible_profile_tweets(page, username)
@@ -1057,15 +1176,26 @@ def run_x_profile_tweets_spider(
 
             total_profiles = len(profile_urls)
             profile_index = 0
+            pending_profiles = [{"profile_url": url, "transient_retry": False} for url in profile_urls]
+            deferred_profiles: list[str] = []
+            final_transient_skips: set[str] = set()
+            transient_skip_state = make_x_transient_skip_state(config)
 
-            for profile_url in profile_urls:
+            while pending_profiles:
                 if should_stop(stop_event):
                     log_line(log_callback, "任务已停止。")
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
 
-                profile_index += 1
+                item = pending_profiles.pop(0)
+                profile_url = item["profile_url"]
+                transient_retry = bool(item.get("transient_retry"))
+                normalized_profile_key = clean_profile_url(profile_url).lower()
+                if normalized_profile_key in final_transient_skips:
+                    continue
+                if not transient_retry:
+                    profile_index += 1
                 username = extract_profile_username(profile_url)
                 claimed, claim_status = checkpoint.claim_item(profile_url)
                 if not claimed:
@@ -1074,7 +1204,8 @@ def run_x_profile_tweets_spider(
                     else:
                         log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
-                log_line(log_callback, f"[{profile_index}/{total_profiles}] 开始处理博主主页：{profile_url}")
+                prefix = "回退补采" if transient_retry else "开始处理"
+                log_line(log_callback, f"[{profile_index}/{total_profiles}] {prefix}博主主页：{profile_url}")
                 
                 try:
                     if not navigate_to_profile(
@@ -1125,16 +1256,35 @@ def run_x_profile_tweets_spider(
                         page_already_loaded=True,
                         date_window_size=date_window_size,
                         recovery_config=config,
+                        transient_skip_state=transient_skip_state,
+                        transient_retry=transient_retry,
                     )
                     log_line(log_callback, f"  完成 @{username} 最新推文采集：写入 {written_count} 条帖子。")
                     checkpoint.mark_completed(
                         profile_url,
                         {"output_path": output_path, "profile_index": profile_index, "written_count": written_count},
                     )
+                    while deferred_profiles:
+                        retry_profile_url = deferred_profiles.pop(0)
+                        retry_key = clean_profile_url(retry_profile_url).lower()
+                        if retry_key in final_transient_skips:
+                            continue
+                        pending_profiles.insert(0, {"profile_url": retry_profile_url, "transient_retry": True})
+                        log_line(log_callback, f"  本轮已有作者采集成功，回退补采此前跳过的博主：{retry_profile_url}")
+                        break
 
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  跳过：页面加载超时，请确认链接可打开且账号已登录。")
                     checkpoint.release_item(profile_url)
+                except XTransientProfileSkipped as exc:
+                    checkpoint.release_item(profile_url)
+                    if exc.retry_after_success and not transient_retry:
+                        if normalized_profile_key not in {clean_profile_url(url).lower() for url in deferred_profiles}:
+                            deferred_profiles.append(profile_url)
+                        log_warn(log_callback, f"  已临时跳过，等待后续作者成功后回退补采一次：{profile_url}")
+                    else:
+                        final_transient_skips.add(normalized_profile_key)
+                        log_warn(log_callback, f"  回退补采仍触发 X 风控，本轮不再回退：{profile_url}")
                 except Exception as exc:
                     log_warn(log_callback, f"  跳过：{exc}")
                     checkpoint.release_item(profile_url)

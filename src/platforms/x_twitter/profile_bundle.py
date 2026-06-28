@@ -28,8 +28,10 @@ from src.platforms.x_twitter.profile_tweets import (
     PAGE_LOAD_TIMEOUT,
     SCROLL_DELAY,
     SCROLL_PX,
+    XTransientProfileSkipped,
     collect_profile_tweets,
     extract_profile_username,
+    make_x_transient_skip_state,
     navigate_to_profile,
     normalize_scroll_delay_range,
     parse_profile_urls,
@@ -218,15 +220,29 @@ def run_x_profile_bundle_spider(
             page = context.new_page()
             tweet_index = 0
             total_profiles = len(profile_urls)
+            pending_profiles = [{"profile_url": url, "transient_retry": False} for url in profile_urls]
+            deferred_profiles: list[str] = []
+            final_transient_skips: set[str] = set()
+            profile_rows_written: set[str] = set()
+            transient_skip_state = make_x_transient_skip_state(config)
 
-            for profile_index, profile_url in enumerate(profile_urls, 1):
+            profile_index = 0
+            while pending_profiles:
                 if should_stop(stop_event):
                     log_line(log_callback, "任务已停止。")
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
 
+                item = pending_profiles.pop(0)
+                profile_url = item["profile_url"]
+                transient_retry = bool(item.get("transient_retry"))
                 profile_url = normalize_x_url(profile_url)
+                profile_key = profile_url.strip().lower()
+                if profile_key in final_transient_skips:
+                    continue
+                if not transient_retry:
+                    profile_index += 1
                 claimed, claim_status = checkpoint.claim_item(profile_url, positive_count_fields=("tweet_count",))
                 if not claimed:
                     if claim_status == "active":
@@ -234,7 +250,8 @@ def run_x_profile_bundle_spider(
                     else:
                         log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
-                log_line(log_callback, f"[{profile_index}/{total_profiles}] 采集博主信息与推文：{profile_url}")
+                prefix = "回退补采" if transient_retry else "采集"
+                log_line(log_callback, f"[{profile_index}/{total_profiles}] {prefix}博主信息与推文：{profile_url}")
 
                 profile_ready = False
                 profile_record_ok = False
@@ -269,7 +286,9 @@ def run_x_profile_bundle_spider(
                     log_warn(log_callback, f"  博主信息采集失败，使用链接兜底：{exc}")
                     profile_record = _fallback_profile_record(profile_url)
 
-                writer.writerow("博主信息", build_profile_row(profile_record))
+                if profile_key not in profile_rows_written:
+                    writer.writerow("博主信息", build_profile_row(profile_record))
+                    profile_rows_written.add(profile_key)
 
                 tweets_collected_ok = False
                 try:
@@ -300,8 +319,22 @@ def run_x_profile_bundle_spider(
                         date_window_size=date_window_size,
                         include_reposts=include_reposts,
                         recovery_config=config,
+                        transient_skip_state=transient_skip_state,
+                        transient_retry=transient_retry,
                     )
                     tweets_collected_ok = True
+                except XTransientProfileSkipped as exc:
+                    tweets = []
+                    writer.save()
+                    checkpoint.release_item(profile_url)
+                    if exc.retry_after_success and not transient_retry:
+                        if profile_key not in {normalize_x_url(url).strip().lower() for url in deferred_profiles}:
+                            deferred_profiles.append(profile_url)
+                        log_warn(log_callback, f"  已临时跳过，等待后续作者成功后回退补采一次：{profile_url}")
+                    else:
+                        final_transient_skips.add(profile_key)
+                        log_warn(log_callback, f"  回退补采仍触发 X 风控，本轮不再回退：{profile_url}")
+                    continue
                 except Exception as exc:
                     log_warn(log_callback, f"  推文采集失败：{exc}")
                     tweets = []
@@ -319,6 +352,14 @@ def run_x_profile_bundle_spider(
                         profile_url,
                         {"output_path": output_path, "profile_index": profile_index, "tweet_count": len(tweets)},
                     )
+                    while deferred_profiles:
+                        retry_profile_url = deferred_profiles.pop(0)
+                        retry_key = normalize_x_url(retry_profile_url).strip().lower()
+                        if retry_key in final_transient_skips:
+                            continue
+                        pending_profiles.insert(0, {"profile_url": retry_profile_url, "transient_retry": True})
+                        log_line(log_callback, f"  本轮已有作者采集成功，回退补采此前跳过的博主：{retry_profile_url}")
+                        break
                 else:
                     checkpoint.release_item(profile_url)
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")

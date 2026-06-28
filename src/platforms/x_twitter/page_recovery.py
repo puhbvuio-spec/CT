@@ -95,9 +95,10 @@ def resolve_x_page_recovery_config(config=None, backoff_seconds: tuple[float, ..
 
 
 def is_x_transient_error_text(text: str) -> str:
-    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    raw_text = str(text or "")
+    normalized = re.sub(r"\s+", " ", raw_text).strip()
     for phrase in X_TRANSIENT_ERROR_PHRASES:
-        if phrase in text or phrase in normalized:
+        if phrase in raw_text or phrase in normalized:
             return phrase
     return ""
 

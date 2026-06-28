@@ -15,6 +15,7 @@ X_RECOVERY_CONFIG_KEYS = (
     "x_network_check_url",
     "x_network_check_timeout",
     "x_network_issue_wait",
+    "x_transient_skip_before_wait",
 )
 BROWSER_OPTIONS = ("全局设置", "Chrome", "Edge")
 
@@ -82,6 +83,8 @@ def _x_recovery_config_params() -> list[ConfigParam]:
                     tooltip="YouTube 检测超时/失败时，等待多久后刷新重试。"),
         ConfigParam("x_network_check_url", "网络检测URL", kind="text", default="https://www.youtube.com/generate_204",
                     tooltip="默认使用 YouTube generate_204。若当地网络无法访问 YouTube，可改成稳定可访问的网址或关闭网络检测。"),
+        ConfigParam("x_transient_skip_before_wait", "X风控跳过几次后等待", kind="int", default=2, minimum=1, maximum=20,
+                    tooltip="作者主页刷不到推文且确认网络正常时，先跳过当前作者；累计跳过到该次数后，再执行一次长等待刷新。"),
     ]
 
 

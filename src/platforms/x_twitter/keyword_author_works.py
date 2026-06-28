@@ -39,7 +39,9 @@ from src.platforms.x_twitter.profile_tweets import (
     PAGE_LOAD_TIMEOUT,
     SCROLL_DELAY,
     SCROLL_PX,
+    XTransientProfileSkipped,
     collect_profile_tweets,
+    make_x_transient_skip_state,
     navigate_to_profile,
     normalize_scroll_delay_range,
     use_profile_search_entry,
@@ -455,19 +457,36 @@ def run_x_keyword_author_works_spider(
             )
             checkpoint.add_output_path(output_path)
 
-            for index, seed in enumerate(list(authors.values())[:max_authors], 1):
+            author_seeds = list(authors.values())[:max_authors]
+            total_authors = len(author_seeds)
+            pending_authors = [{"seed": seed, "transient_retry": False} for seed in author_seeds]
+            deferred_authors: list[AuthorSeed] = []
+            final_transient_skips: set[str] = set()
+            transient_skip_state = make_x_transient_skip_state(config)
+            index = 0
+
+            while pending_authors:
                 if should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
+                item = pending_authors.pop(0)
+                seed = item["seed"]
+                transient_retry = bool(item.get("transient_retry"))
+                seed_key = normalize_x_url(seed.profile_url).strip().lower()
+                if seed_key in final_transient_skips:
+                    continue
+                if not transient_retry:
+                    index += 1
                 claimed, claim_status = checkpoint.claim_item(seed.profile_url, positive_count_fields=("works_count",))
                 if not claimed:
                     if claim_status == "active":
-                        log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 双开分流跳过正在处理的作者：{seed.profile_url}")
+                        log_line(log_callback, f"[{index}/{total_authors}] 双开分流跳过正在处理的作者：{seed.profile_url}")
                     else:
-                        log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
+                        log_line(log_callback, f"[{index}/{total_authors}] 断点续跑跳过已完成作者：{seed.profile_url}")
                     continue
-                log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入作者主页：{seed.profile_url}")
+                prefix = "回退补采" if transient_retry else "进入"
+                log_line(log_callback, f"[{index}/{total_authors}] {prefix}作者主页：{seed.profile_url}")
                 profile_ready = navigate_to_profile(
                     profile_page,
                     seed.profile_url,
@@ -538,8 +557,21 @@ def run_x_keyword_author_works_spider(
                         page_already_loaded=True,
                         include_reposts=False,
                         recovery_config=config,
+                        transient_skip_state=transient_skip_state,
+                        transient_retry=transient_retry,
                     )
                     works_collected_ok = True
+                except XTransientProfileSkipped as exc:
+                    works = []
+                    checkpoint.release_item(seed.profile_url)
+                    if exc.retry_after_success and not transient_retry:
+                        if seed_key not in {normalize_x_url(item.profile_url).strip().lower() for item in deferred_authors}:
+                            deferred_authors.append(seed)
+                        log_warn(log_callback, f"  已临时跳过，等待后续作者成功后回退补采一次：{seed.profile_url}")
+                    else:
+                        final_transient_skips.add(seed_key)
+                        log_warn(log_callback, f"  回退补采仍触发 X 风控，本轮不再回退：{seed.profile_url}")
+                    continue
                 except Exception as exc:
                     log_warn(log_callback, f"  作者作品采集失败：{exc}")
                     works = []
@@ -549,6 +581,14 @@ def run_x_keyword_author_works_spider(
                         seed.profile_url,
                         {"output_path": output_path, "index": index, "works_count": len(works)},
                     )
+                    while deferred_authors:
+                        retry_seed = deferred_authors.pop(0)
+                        retry_key = normalize_x_url(retry_seed.profile_url).strip().lower()
+                        if retry_key in final_transient_skips:
+                            continue
+                        pending_authors.insert(0, {"seed": retry_seed, "transient_retry": True})
+                        log_line(log_callback, f"  本轮已有作者采集成功，回退补采此前跳过的作者：{retry_seed.profile_url}")
+                        break
                 else:
                     checkpoint.release_item(seed.profile_url)
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
