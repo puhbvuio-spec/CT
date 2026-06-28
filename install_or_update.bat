@@ -13,7 +13,7 @@ rem   set SCRAPER_INSTALL_DIR=D:\tools\social-platform-scraper
 
 set "APP_NAME=Social Platform Scraper"
 set "REPO_URL=https://github.com/puhbvuio-spec/CT.git"
-set "REPO_ZIP_URL=https://github.com/puhbvuio-spec/CT/archive/refs/heads/main.zip"
+set "REPO_ZIP_URL=https://codeload.github.com/puhbvuio-spec/CT/zip/refs/heads/main"
 set "DEFAULT_DIR=%USERPROFILE%\social-platform-scraper"
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
@@ -342,6 +342,7 @@ if exist "%INSTALL_DIR%" (
 )
 
 echo.
+call :ensure_install_parent_writable || exit /b 1
 call :clone_source
 if errorlevel 1 (
     echo.
@@ -351,14 +352,18 @@ if errorlevel 1 (
 exit /b 0
 
 :clone_source
-set "CLONE_TMP=%INSTALL_DIR%.gitclone_%RANDOM%%RANDOM%"
+set "CLONE_TMP=%TEMP%\sct_gitclone_%RANDOM%%RANDOM%"
 if exist "!CLONE_TMP!" rmdir /s /q "!CLONE_TMP!"
 for /L %%A in (1,1,3) do (
     echo.
     echo Cloning repository, attempt %%A/3...
     git -c http.version=HTTP/1.1 clone --depth 1 "%REPO_URL%" "!CLONE_TMP!"
     if not errorlevel 1 (
-        call :replace_empty_target_with "!CLONE_TMP!" || exit /b 1
+        call :replace_empty_target_with "!CLONE_TMP!"
+        if errorlevel 1 (
+            if exist "!CLONE_TMP!" rmdir /s /q "!CLONE_TMP!"
+            exit /b 1
+        )
         exit /b 0
     )
     if exist "!CLONE_TMP!" rmdir /s /q "!CLONE_TMP!"
@@ -378,9 +383,10 @@ if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
 
 echo.
 echo Downloading repository ZIP...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%REPO_ZIP_URL%' -OutFile '%ZIP_TMP%' -UseBasicParsing"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri $env:REPO_ZIP_URL -OutFile $env:ZIP_TMP -UseBasicParsing -Headers @{ 'User-Agent' = 'SocialPlatformScraperInstaller' }"
 if errorlevel 1 (
     echo [ERROR] ZIP download failed. Check network access to github.com.
+    echo        ZIP URL: %REPO_ZIP_URL%
     if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
     exit /b 1
 )
@@ -412,6 +418,45 @@ call :replace_empty_target_with "!ZIP_ROOT!" || (
 if exist "!ZIP_TMP!" del /q "!ZIP_TMP!"
 if exist "!EXTRACT_TMP!" rmdir /s /q "!EXTRACT_TMP!"
 echo [OK] Installed from ZIP fallback. Future automatic git update is unavailable for this copy.
+exit /b 0
+
+:ensure_install_parent_writable
+for %%I in ("%INSTALL_DIR%") do set "TARGET_PARENT=%%~dpI"
+if not defined TARGET_PARENT set "TARGET_PARENT=%USERPROFILE%\"
+if not exist "!TARGET_PARENT!" mkdir "!TARGET_PARENT!" 2>nul
+if not exist "!TARGET_PARENT!" (
+    echo [ERROR] Parent directory does not exist and could not be created:
+    echo        "!TARGET_PARENT!"
+    exit /b 1
+)
+set "CREATED_INSTALL_TEST_DIR=0"
+if not exist "%INSTALL_DIR%" (
+    mkdir "%INSTALL_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Cannot create the selected install directory:
+        echo        "%INSTALL_DIR%"
+        echo.
+        echo Choose a user-writable directory, for example:
+        echo        "%USERPROFILE%\social-platform-scraper"
+        echo or rerun this installer as Administrator if you intentionally want Program Files.
+        exit /b 1
+    )
+    set "CREATED_INSTALL_TEST_DIR=1"
+)
+set "WRITE_TEST_FILE=%INSTALL_DIR%\.sct_write_test_%RANDOM%%RANDOM%.tmp"
+break > "!WRITE_TEST_FILE!" 2>nul
+if errorlevel 1 (
+    echo [ERROR] Cannot write to the selected install location:
+    echo        "%INSTALL_DIR%"
+    echo.
+    echo Choose a user-writable directory, for example:
+    echo        "%USERPROFILE%\social-platform-scraper"
+    echo or rerun this installer as Administrator if you intentionally want Program Files.
+    if "!CREATED_INSTALL_TEST_DIR!"=="1" rmdir "%INSTALL_DIR%" >nul 2>nul
+    exit /b 1
+)
+del /q "!WRITE_TEST_FILE!" >nul 2>nul
+if "!CREATED_INSTALL_TEST_DIR!"=="1" rmdir "%INSTALL_DIR%" >nul 2>nul
 exit /b 0
 
 :replace_empty_target_with
