@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
 
+from src.core.app_state import get_app_state_root
 from src.core.output import get_workspace_root
 
 
@@ -46,8 +48,40 @@ def task_fingerprint(tool_id: str, scope: dict[str, Any]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+_MIGRATED_CHECKPOINT_PAIRS: set[tuple[str, str]] = set()
+
+
+def _copy_missing_tree(src: Path, dst: Path) -> None:
+    if not src.exists():
+        return
+    for item in src.rglob("*"):
+        rel = item.relative_to(src)
+        target = dst / rel
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return left.absolute() == right.absolute()
+
+
 def checkpoint_root() -> Path:
-    return get_workspace_root() / "output" / "checkpoints"
+    override = os.environ.get("SCRAPER_CHECKPOINT_DIR")
+    root = Path(override).expanduser() if override else get_app_state_root() / "checkpoints"
+    legacy_root = get_workspace_root() / "output" / "checkpoints"
+    if not _same_path(root, legacy_root):
+        pair = (str(legacy_root.absolute()).lower(), str(root.absolute()).lower())
+        if pair not in _MIGRATED_CHECKPOINT_PAIRS:
+            _copy_missing_tree(legacy_root, root)
+            _MIGRATED_CHECKPOINT_PAIRS.add(pair)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:

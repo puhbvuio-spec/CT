@@ -3,6 +3,7 @@
 """
 
 from src.core.app_logging import get_logger, log_error, log_line, log_warn, make_keyword_log, setup_console_logging
+from src.core.app_state import get_app_state_root
 from src.core.config_store import (
     GLOBAL_ALIAS_MAP,
     GLOBAL_CONFIG_DEFAULTS,
@@ -40,6 +41,7 @@ __all__ = [
     "GLOBAL_CONFIG_DEFAULTS",
     "GLOBAL_CONFIG_PARAMS",
     "GLOBAL_TOOL_ID",
+    "get_app_state_root",
     "generate_all_defaults",
     "get_config_path",
     "load_config",

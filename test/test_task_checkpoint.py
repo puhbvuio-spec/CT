@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +14,16 @@ from src.core.task_checkpoint import (
 from src.core.xlsx import MultiSheetXlsxWriter, XlsxRowWriter
 
 
+@contextmanager
+def _patched_checkpoint_roots(tmp: str):
+    root = Path(tmp)
+    with patch("src.core.task_checkpoint.get_workspace_root", return_value=root), patch(
+        "src.core.task_checkpoint.get_app_state_root",
+        return_value=root,
+    ):
+        yield root
+
+
 class TestTaskCheckpoint(unittest.TestCase):
     def test_fingerprint_is_stable_for_dict_order(self):
         left = task_fingerprint("tool", {"b": 2, "a": [1, 2]})
@@ -20,13 +32,31 @@ class TestTaskCheckpoint(unittest.TestCase):
 
     def test_save_and_load_tool_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+            with _patched_checkpoint_roots(tmp):
                 save_tool_inputs("tool_x", {"keywords": "a\nb", "limit_time": "是"})
                 self.assertEqual(load_tool_inputs("tool_x")["keywords"], "a\nb")
 
+    def test_checkpoint_migrates_legacy_workspace_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            state = Path(tmp) / "state"
+            legacy = workspace / "output" / "checkpoints" / "last_inputs"
+            legacy.mkdir(parents=True)
+            (legacy / "tool_legacy.json").write_text(
+                json.dumps({"values": {"keywords": "old"}}),
+                encoding="utf-8",
+            )
+
+            with patch("src.core.task_checkpoint.get_workspace_root", return_value=workspace), patch(
+                "src.core.task_checkpoint.get_app_state_root",
+                return_value=state,
+            ):
+                self.assertEqual(load_tool_inputs("tool_legacy")["keywords"], "old")
+                self.assertTrue((state / "checkpoints" / "last_inputs" / "tool_legacy.json").exists())
+
     def test_checkpoint_marks_completed_items(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+            with _patched_checkpoint_roots(tmp):
                 checkpoint = open_task_checkpoint("tool_y", {"links": ["A", "B"]})
                 self.assertFalse(checkpoint.is_completed("A"))
                 checkpoint.mark_completed("A", {"row": 1})
@@ -37,7 +67,7 @@ class TestTaskCheckpoint(unittest.TestCase):
 
     def test_successful_completion_distinguishes_old_zero_count_records(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+            with _patched_checkpoint_roots(tmp):
                 checkpoint = open_task_checkpoint("tool_counts", {"links": ["A", "B"]})
                 checkpoint.completed["a"] = {
                     "completed_at": "2026-01-01 00:00:00",
@@ -58,7 +88,7 @@ class TestTaskCheckpoint(unittest.TestCase):
 
     def test_checkpoint_log_mentions_input_count_and_history_count(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+            with _patched_checkpoint_roots(tmp):
                 checkpoint = open_task_checkpoint("tool_log", {"profile_urls": ["A", "B"]})
                 checkpoint.mark_completed("A", {"profile_ok": 1})
 
@@ -70,7 +100,7 @@ class TestTaskCheckpoint(unittest.TestCase):
 
     def test_checkpoint_can_merge_same_input_with_different_runtime_limits(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+            with _patched_checkpoint_roots(tmp):
                 old_checkpoint = open_task_checkpoint("tool_merge", {"profile_urls": ["A", "B"], "max_scrolls": 50})
                 old_output_path = Path(tmp) / "old.xlsx"
                 old_output_path.touch()

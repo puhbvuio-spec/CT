@@ -20,6 +20,7 @@ from src.core.updater import (
     is_newer,
     parse_semver,
 )
+from src.core.hot_updater import _replace_project
 
 
 # ── parse_semver 测试 ────────────────────────────────────────────
@@ -87,6 +88,23 @@ def test_check_no_release():
         assert has_update is False
         assert latest is None
         assert url is None
+
+
+def test_hot_update_preserves_local_config(tmp_path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "main.py").write_text("print('new')\n", encoding="utf-8")
+    (src / "config").mkdir()
+    (src / "config" / "__global__.json").write_text('{"browser": "auto"}\n', encoding="utf-8")
+    (dst / "config").mkdir()
+    (dst / "config" / "__global__.json").write_text('{"browser": "edge"}\n', encoding="utf-8")
+
+    _replace_project(src, dst)
+
+    assert (dst / "main.py").read_text(encoding="utf-8") == "print('new')\n"
+    assert (dst / "config" / "__global__.json").read_text(encoding="utf-8") == '{"browser": "edge"}\n'
 
 
 def test_check_unauthorized_retry_without_token(monkeypatch):

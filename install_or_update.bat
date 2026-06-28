@@ -574,6 +574,11 @@ exit /b 0
 if not exist "%INSTALL_DIR%\output" mkdir "%INSTALL_DIR%\output"
 if not exist "%INSTALL_DIR%\user_data" mkdir "%INSTALL_DIR%\user_data"
 if not exist "%INSTALL_DIR%\user_data_edge" mkdir "%INSTALL_DIR%\user_data_edge"
+if defined LOCALAPPDATA (
+    if not exist "%LOCALAPPDATA%\SocialPlatformScraper\browser_profiles\chrome" mkdir "%LOCALAPPDATA%\SocialPlatformScraper\browser_profiles\chrome"
+    if not exist "%LOCALAPPDATA%\SocialPlatformScraper\browser_profiles\edge" mkdir "%LOCALAPPDATA%\SocialPlatformScraper\browser_profiles\edge"
+    if not exist "%LOCALAPPDATA%\SocialPlatformScraper\checkpoints" mkdir "%LOCALAPPDATA%\SocialPlatformScraper\checkpoints"
+)
 if not exist "%INSTALL_DIR%\.env" (
     echo.
     echo [WARN] .env was not found. YouTube API / AIGC tools may need API keys.
@@ -587,10 +592,10 @@ exit /b 0
 echo.
 echo Notes:
 echo   - Re-run install_or_update.bat any time to update code and dependencies.
-echo   - Chrome CDP uses port 9222 and user_data.
-echo   - Edge CDP uses port 9223 and user_data_edge.
+echo   - Chrome CDP uses port 9222; Edge CDP uses port 9223.
+echo   - Browser login profiles and checkpoints use %%LOCALAPPDATA%%\SocialPlatformScraper by default.
 echo   - X tools can switch browser in the app global settings.
-echo   - output, user_data, user_data_edge and .env are kept locally.
+echo   - output, config, legacy user_data/user_data_edge and .env are kept locally.
 exit /b 0
 
 :failed

@@ -13,10 +13,12 @@ import logging
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+from src.core.app_state import get_app_state_root
 from src.core.app_logging import log_line
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,15 @@ _BROWSER_EXE_NAME = {
 _BROWSER_LOCAL_REL = {
     BROWSER_CHROME: ("Google", "Chrome", "Application", "chrome.exe"),
     BROWSER_EDGE: ("Microsoft", "Edge", "Application", "msedge.exe"),
+}
+
+_BROWSER_PROFILE_DIR_NAME = {
+    BROWSER_CHROME: "chrome",
+    BROWSER_EDGE: "edge",
+}
+_BROWSER_PROFILE_ENV = {
+    BROWSER_CHROME: "SCRAPER_CHROME_USER_DATA_DIR",
+    BROWSER_EDGE: "SCRAPER_EDGE_USER_DATA_DIR",
 }
 
 # 保存自动拉起的浏览器子进程实例，以便在退出时进行清理
@@ -137,13 +148,25 @@ def get_workspace_root():
     return get_workspace_root()
 
 
+def _is_nonempty_dir(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
+def _legacy_user_data_dir(browser: str) -> Path:
+    dir_name = "user_data_edge" if browser == BROWSER_EDGE else "user_data"
+    return get_workspace_root() / dir_name
+
+
 def get_chrome_user_data_dir(browser: str = BROWSER_CHROME) -> str:
     """
     获取浏览器缓存及用户登录信息的存储路径。
 
-    Chrome 与 Edge 的 profile 格式不完全兼容，分目录存放避免冲突：
-        workspace/user_data/        -> Chrome（保持原路径以兼容老用户）
-        workspace/user_data_edge/   -> Edge
+    Chrome 与 Edge 的 profile 格式不完全兼容，分目录存放避免冲突。
+    新安装默认使用 LOCALAPPDATA 下的稳定目录，避免代码更新或安装目录变化后丢失登录态。
+    如果旧安装目录内已有 user_data/user_data_edge，则继续复用旧目录，避免当前用户被迫重登。
 
     Args:
         browser: BROWSER_CHROME 或 BROWSER_EDGE
@@ -151,10 +174,24 @@ def get_chrome_user_data_dir(browser: str = BROWSER_CHROME) -> str:
     Returns:
         str: 绝对路径字符串
     """
-    dir_name = "user_data_edge" if browser == BROWSER_EDGE else "user_data"
-    user_data_dir = get_workspace_root() / dir_name
-    user_data_dir.mkdir(parents=True, exist_ok=True)
-    return str(user_data_dir)
+    resolved_browser = BROWSER_EDGE if browser == BROWSER_EDGE else BROWSER_CHROME
+    override = os.environ.get(_BROWSER_PROFILE_ENV[resolved_browser])
+    if override:
+        user_data_dir = Path(override).expanduser()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        return str(user_data_dir)
+
+    stable_root = get_app_state_root() / "browser_profiles"
+    stable_dir = stable_root / _BROWSER_PROFILE_DIR_NAME[resolved_browser]
+    legacy_dir = _legacy_user_data_dir(resolved_browser)
+
+    if _is_nonempty_dir(stable_dir):
+        return str(stable_dir)
+    if _is_nonempty_dir(legacy_dir):
+        return str(legacy_dir)
+
+    stable_dir.mkdir(parents=True, exist_ok=True)
+    return str(stable_dir)
 
 
 def _resolve_browser_preference(browser: str | None) -> str:
@@ -448,6 +485,7 @@ def ensure_chrome_for_cdp(port_or_url: str | int, log_callback=None, wait_second
         _kill_chrome_on_port(port_or_url, log_callback, browser=resolved_browser)
 
     log_line(log_callback, f"未检测到浏览器，正在自动启动 {browser_display}...")
+    log_line(log_callback, f"{browser_display} 用户数据目录：{get_chrome_user_data_dir(resolved_browser)}")
     launch_chrome_for_cdp(port_or_url, browser=resolved_browser)
     launched = True
 
