@@ -93,6 +93,7 @@ class SimpleToolWindow(QWidget):
         self.config_values: dict[str, Any] = {}
         self._build_ui()
         self._load_persisted_config()
+        self._load_last_inputs()
 
     def _build_ui(self) -> None:
         """构建基础布局、动态字段表单、控制按钮以及只读日志文本框。"""
@@ -317,6 +318,47 @@ class SimpleToolWindow(QWidget):
             values[field.name] = value
         return values
 
+    def _load_last_inputs(self) -> None:
+        """Restore the last successfully submitted form values for this tool."""
+        if not self.tool_id:
+            return
+        try:
+            from src.core.task_checkpoint import load_tool_inputs
+
+            values = load_tool_inputs(self.tool_id)
+        except Exception:
+            return
+        if values:
+            self._apply_field_values(values)
+
+    def _apply_field_values(self, values: dict[str, Any]) -> None:
+        for field in self.fields:
+            if field.name not in values or field.name not in self.widgets:
+                continue
+            value = values.get(field.name)
+            widget = self.widgets[field.name]
+            try:
+                if field.kind == "multiline":
+                    widget.setPlainText(str(value or ""))
+                elif field.kind == "int":
+                    widget.setValue(int(value or field.minimum))
+                elif field.kind == "combo":
+                    text = str(value or "")
+                    index = widget.findText(text)
+                    if index >= 0:
+                        widget.setCurrentIndex(index)
+                elif field.kind in {"file", "folder"}:
+                    widget.path_edit.setText(str(value or ""))
+                elif field.kind == "text_or_file":
+                    widget.mode_combo.setCurrentText("直接输入")
+                    widget.text_edit.setPlainText(str(value or ""))
+                    widget.text_edit.show()
+                    widget.file_edit.parentWidget().hide()
+                else:
+                    widget.setText(str(value or ""))
+            except Exception:
+                continue
+
     def set_field_visible(self, field_name: str, visible: bool) -> None:
         """设定某个字段的可见性，联动隐藏其 Label 标签。"""
         widget = self.widgets.get(field_name)
@@ -368,6 +410,13 @@ class SimpleToolWindow(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "参数错误", str(exc))
             return
+        if self.tool_id:
+            try:
+                from src.core.task_checkpoint import save_tool_inputs
+
+                save_tool_inputs(self.tool_id, values)
+            except Exception:
+                pass
         
         self.log_text.clear()
         self.stop_event.clear()
@@ -609,4 +658,3 @@ class SimpleToolWindow(QWidget):
                 event.ignore()
                 return
         event.accept()
-

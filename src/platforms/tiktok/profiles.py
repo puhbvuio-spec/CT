@@ -9,7 +9,6 @@ import json
 from playwright.sync_api import sync_playwright
 
 from src.core import (
-    XlsxRowWriter,
     build_output_path,
     connect_existing_chromium,
     expand_compact_number,
@@ -22,6 +21,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 
 CSV_FIELDS = ["博主主页链接", "博主名称", "博主ID", "粉丝量", "作者简介"]
 
@@ -347,9 +347,20 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
         if not profile_urls:
             log_warn(log_callback, "TXT 中没有找到有效的 TikTok 博主主页链接。")
             return
+        checkpoint = open_task_checkpoint(
+            "tiktok_profile_directory",
+            {"profile_urls": profile_urls},
+            log_callback=log_callback,
+        )
 
-        output_path = build_output_path("tiktok", f"tiktok_profiles_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profiles")
-        writer = XlsxRowWriter(output_path, CSV_FIELDS)
+        default_output_path = build_output_path("tiktok", f"tiktok_profiles_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profiles")
+        output_path, writer = open_checkpointed_row_writer(
+            checkpoint,
+            default_output_path,
+            CSV_FIELDS,
+            log_callback=log_callback,
+        )
+        checkpoint.add_output_path(output_path)
 
         with sync_playwright() as p:
             log_line(log_callback, "正在连接本地 Chrome...")
@@ -366,6 +377,9 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
+                if checkpoint.is_completed(profile_url):
+                    log_line(log_callback, f"[{index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
+                    continue
                 log_line(log_callback, f"[{index}/{len(profile_urls)}] 提取博主信息：{profile_url}")
                 try:
                     row = extract_profile_row(page, profile_url, page_load_timeout=page_load_timeout, captcha_wait=captcha_wait)
@@ -381,6 +395,7 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     log_error(log_callback, f"  失败：{exc}")
 
                 writer.writerow(sanitize_csv_row(row))
+                checkpoint.mark_completed(profile_url, {"output_path": output_path, "index": index})
                 # 每抓取 5 个博主主页进行随机冷却，以避免触发高频风控限制
                 if index % cooldown_every_val == 0:
                     if random_cooldown(log_callback, stop_event, cooldown_min_val, cooldown_max_val):

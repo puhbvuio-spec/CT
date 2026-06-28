@@ -11,7 +11,6 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from src.core import (
     DEFAULT_X_CDP_URL,
-    MultiSheetXlsxWriter,
     build_output_path,
     connect_existing_chromium,
     log_error,
@@ -20,6 +19,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.platforms.x_twitter.profile_tweets import (
     DEFAULT_MAX_SCROLLS,
     DEFAULT_PROFILE_TWEET_LIMIT,
@@ -170,20 +170,33 @@ def run_x_profile_bundle_spider(
         start_dt = end_dt = None
         if requested_time_limit:
             log_line(log_callback, "主页推文采集采用最新数量优先，已忽略时间窗口过滤。")
+        checkpoint = open_task_checkpoint(
+            "x_profile_bundle",
+            {
+                "profile_urls": profile_urls,
+                "max_tweets_per_author": max_tweets_per_author,
+                "max_scrolls": max_scrolls,
+                "include_reposts": include_reposts,
+            },
+            log_callback=log_callback,
+        )
 
-        output_path = build_output_path(
+        default_output_path = build_output_path(
             "x",
             f"x_profile_bundle_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
             channel="profile_bundle",
         )
-        writer = MultiSheetXlsxWriter(
-            output_path,
+        output_path, writer = open_checkpointed_multi_sheet_writer(
+            checkpoint,
+            default_output_path,
             {
                 "博主信息": PROFILE_FIELDS,
                 "博主对应推文": TWEET_FIELDS,
             },
+            log_callback=log_callback,
             autosave_every=10,
         )
+        checkpoint.add_output_path(output_path)
 
         with sync_playwright() as playwright:
             log_line(log_callback, "正在连接本地浏览器...")
@@ -206,6 +219,9 @@ def run_x_profile_bundle_spider(
                     break
 
                 profile_url = normalize_x_url(profile_url)
+                if checkpoint.is_completed(profile_url):
+                    log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
+                    continue
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 采集博主信息与推文：{profile_url}")
 
                 profile_ready = False
@@ -275,6 +291,10 @@ def run_x_profile_bundle_spider(
                 log_line(
                     log_callback,
                     f"  完成：{profile_record.get('账号ID') or profile_url}，写入 {len(tweets)} 条推文。",
+                )
+                checkpoint.mark_completed(
+                    profile_url,
+                    {"output_path": output_path, "profile_index": profile_index, "tweet_count": len(tweets)},
                 )
 
         completed_path = output_path

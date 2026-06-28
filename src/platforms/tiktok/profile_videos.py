@@ -15,8 +15,6 @@ except ModuleNotFoundError:
     sync_playwright = None
 
 from src.core import (
-    XlsxRowWriter,
-    MultiSheetXlsxWriter,
     build_output_path,
     connect_existing_chromium,
     interruptible_sleep,
@@ -28,6 +26,11 @@ from src.core import (
     wait_if_paused,
 )
 from src.core import expand_compact_number, extract_tiktok_video_title
+from src.core.task_checkpoint import (
+    open_checkpointed_multi_sheet_writer,
+    open_checkpointed_row_writer,
+    open_task_checkpoint,
+)
 from src.platforms.tiktok.comments import collect_video_comments
 
 
@@ -786,6 +789,20 @@ def run_tiktok_profile_videos_spider(
             start_dt, end_dt = parse_date_range(start_date, end_date)
 
         fetch_play_counts_bool = (fetch_play_counts_str == "是")
+        checkpoint = open_task_checkpoint(
+            "tiktok_profile_videos",
+            {
+                "profile_urls": profile_urls,
+                "limit_time": limit_time_bool,
+                "start_date": start_date if limit_time_bool else "",
+                "end_date": end_date if limit_time_bool else "",
+                "get_video_info": get_video_info_bool,
+                "get_comments": get_comments_bool,
+                "max_comments": max_comments if get_comments_bool else 0,
+                "fetch_play_counts": fetch_play_counts_bool,
+            },
+            log_callback=log_callback,
+        )
 
         video_fields = ["序号", "视频链接"]
         if fetch_play_counts_bool:
@@ -793,12 +810,23 @@ def run_tiktok_profile_videos_spider(
         if get_video_info_bool:
             video_fields.extend(["发布日期", "视频简介", "点赞数", "评论数", "收藏量", "分享数"])
 
-        output_path = build_output_path("tiktok", f"tiktok_profile_videos_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profile_videos")
+        default_output_path = build_output_path("tiktok", f"tiktok_profile_videos_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profile_videos")
         if get_comments_bool:
             comment_fields = ["序号", "视频链接", "评论的点赞量", "评论内容", "发布时间"]
-            writer = MultiSheetXlsxWriter(output_path, {"视频信息": video_fields, "评论信息": comment_fields})
+            output_path, writer = open_checkpointed_multi_sheet_writer(
+                checkpoint,
+                default_output_path,
+                {"视频信息": video_fields, "评论信息": comment_fields},
+                log_callback=log_callback,
+            )
         else:
-            writer = XlsxRowWriter(output_path, video_fields)
+            output_path, writer = open_checkpointed_row_writer(
+                checkpoint,
+                default_output_path,
+                video_fields,
+                log_callback=log_callback,
+            )
+        checkpoint.add_output_path(output_path)
 
         written_count = 0
         serial_number = 1
@@ -825,6 +853,9 @@ def run_tiktok_profile_videos_spider(
                 profile_url = normalize_profile_url(raw_profile_url)
                 if not profile_url:
                     log_warn(log_callback, f"[{profile_index}/{len(profile_urls)}] 跳过无效主页：{raw_profile_url}")
+                    continue
+                if checkpoint.is_completed(profile_url):
+                    log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
 
                 log_line(log_callback, f"[{profile_index}/{len(profile_urls)}] 读取主页：{profile_url}")
@@ -966,6 +997,15 @@ def run_tiktok_profile_videos_spider(
                             detail_delay_min=detail_delay_min_val,
                             detail_delay_max=detail_delay_max_val,
                         )
+                if not should_stop(stop_event):
+                    checkpoint.mark_completed(
+                        profile_url,
+                        {
+                            "output_path": output_path,
+                            "profile_index": profile_index,
+                            "processed_count": processed_count,
+                        },
+                    )
 
             if fetch_play_counts_bool:
                 try:

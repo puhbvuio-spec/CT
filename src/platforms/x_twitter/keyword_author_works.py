@@ -11,7 +11,6 @@ except ModuleNotFoundError:  # pragma: no cover
     sync_playwright = None
 
 from src.core import (
-    XlsxRowWriter,
     build_output_path,
     connect_existing_chromium,
     ensure_chrome_for_cdp,
@@ -22,6 +21,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 from src.platforms.x_twitter.keyword import (
     MAX_SEARCH_SCROLLS,
     _find_recommendation_boundary_index,
@@ -373,6 +373,19 @@ def run_x_keyword_author_works_spider(
         )
         if quick_mode_enabled(quick_mode_value):
             log_line(log_callback, f"快速模式已开启：作者主页作品最多取最新 {QUICK_PROFILE_WORK_LIMIT} 条，不足则采完即停。")
+        checkpoint = open_task_checkpoint(
+            "x_keyword_author_works",
+            {
+                "keywords": list(keywords_list),
+                "limit_time": limit_time_bool,
+                "start_date": adv_params.get("start_date", "") if limit_time_bool else "",
+                "end_date": adv_params.get("end_date", "") if limit_time_bool else "",
+                "lang": adv_params.get("lang", "any"),
+                "quick_mode": quick_mode_value,
+                "max_profile_works": max_profile_works,
+            },
+            log_callback=log_callback,
+        )
         ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback, browser=browser_choice)
         with sync_playwright() as playwright:
             _, context = connect_existing_chromium(playwright, cdp_port_or_url, browser=browser_choice)
@@ -399,18 +412,28 @@ def run_x_keyword_author_works_spider(
                 log_warn(log_callback, "没有从关键词结果中发现有效作者。")
                 return
 
-            output_path = build_output_path(
+            default_output_path = build_output_path(
                 "x",
                 f"x_keyword_author_works_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
                 channel="keyword_author_works",
             )
-            writer = XlsxRowWriter(output_path, CSV_FIELDS, autosave_every=5)
+            output_path, writer = open_checkpointed_row_writer(
+                checkpoint,
+                default_output_path,
+                CSV_FIELDS,
+                log_callback=log_callback,
+                autosave_every=5,
+            )
+            checkpoint.add_output_path(output_path)
 
             for index, seed in enumerate(list(authors.values())[:max_authors], 1):
                 if should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
+                if checkpoint.is_completed(seed.profile_url):
+                    log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
+                    continue
                 log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入作者主页：{seed.profile_url}")
                 profile_ready = navigate_to_profile_via_search(
                     profile_page,
@@ -477,6 +500,10 @@ def run_x_keyword_author_works_spider(
                     log_warn(log_callback, f"  作者作品采集失败：{exc}")
                     works = []
                 writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                checkpoint.mark_completed(
+                    seed.profile_url,
+                    {"output_path": output_path, "index": index, "works_count": len(works)},
+                )
                 log_line(log_callback, f"  写入作者：{profile_record.get('账号ID') or seed.account_id or seed.profile_url}，作品 {len(works)} 条。")
 
             writer.save()

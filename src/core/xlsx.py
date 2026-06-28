@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from src.core.csv_utils import sanitize_csv_cell
 
@@ -37,6 +37,7 @@ class XlsxRowWriter:
         fieldnames: Iterable[str],
         sheet_name: str = "数据",
         autosave_every: int = 1,
+        append: bool = False,
     ):
         """
         Args:
@@ -50,12 +51,25 @@ class XlsxRowWriter:
         self.fieldnames = list(fieldnames)
         self.autosave_every = max(1, int(autosave_every or 1))
         self._rows_since_save = 0
-        self.workbook = Workbook()
-        self.worksheet = self.workbook.active
-        # Excel 规定 Sheet 名称最大长度为 31 字符，超出直接被截断
-        self.worksheet.title = sheet_name[:31] or "数据"
-        self.worksheet.append(self.fieldnames)
-        self.save()
+        if append and Path(self.output_path).exists():
+            self._load_for_append(sheet_name)
+        else:
+            self.workbook = Workbook()
+            self.worksheet = self.workbook.active
+            # Excel 规定 Sheet 名称最大长度为 31 字符，超出直接被截断
+            self.worksheet.title = sheet_name[:31] or "数据"
+            self.worksheet.append(self.fieldnames)
+            self.save()
+
+    def _load_for_append(self, sheet_name: str) -> None:
+        workbook = load_workbook(self.output_path)
+        expected_sheet_name = sheet_name[:31] or "数据"
+        worksheet = workbook[expected_sheet_name] if expected_sheet_name in workbook.sheetnames else workbook.active
+        header = [cell.value for cell in next(worksheet.iter_rows(min_row=1, max_row=1), [])]
+        if header != self.fieldnames:
+            raise ValueError(f"Existing XLSX header does not match: {self.output_path}")
+        self.workbook = workbook
+        self.worksheet = worksheet
 
     def writerow(self, row: Mapping[str, Any]):
         """
@@ -111,6 +125,7 @@ class MultiSheetXlsxWriter:
         output_path: str,
         sheets_fields: dict[str, list[str]],
         autosave_every: int = 1,
+        append: bool = False,
     ):
         """
         Args:
@@ -124,19 +139,43 @@ class MultiSheetXlsxWriter:
         self.autosave_every = max(1, int(autosave_every or 1))
         self._rows_since_save = 0
 
-        self.workbook = Workbook()
-        # 移除 openpyxl 实例化时自动创建的默认 Sheet，以便仅保留用户自定义的 Sheet
-        default_sheet = self.workbook.active
-        if default_sheet is not None:
-            self.workbook.remove(default_sheet)
+        if append and Path(self.output_path).exists():
+            self._load_for_append()
+        else:
+            self.workbook = Workbook()
+            # 移除 openpyxl 实例化时自动创建的默认 Sheet，以便仅保留用户自定义的 Sheet
+            default_sheet = self.workbook.active
+            if default_sheet is not None:
+                self.workbook.remove(default_sheet)
 
-        self.worksheets = {}
-        for sheet_name, fieldnames in sheets_fields.items():
-            # 同样遵循 31 字符上限限制
-            ws = self.workbook.create_sheet(title=sheet_name[:31] or "Sheet")
-            ws.append(list(fieldnames))
-            self.worksheets[sheet_name] = ws
-        self.save()
+            self.worksheets = {}
+            for sheet_name, fieldnames in sheets_fields.items():
+                # 同样遵循 31 字符上限限制
+                ws = self.workbook.create_sheet(title=sheet_name[:31] or "Sheet")
+                ws.append(list(fieldnames))
+                self.worksheets[sheet_name] = ws
+            self.save()
+
+    def _load_for_append(self) -> None:
+        workbook = load_workbook(self.output_path)
+        worksheets = {}
+        changed = False
+        for sheet_name, fieldnames in self.sheets_fields.items():
+            excel_sheet_name = sheet_name[:31] or "Sheet"
+            if excel_sheet_name in workbook.sheetnames:
+                ws = workbook[excel_sheet_name]
+                header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1), [])]
+                if header != list(fieldnames):
+                    raise ValueError(f"Existing XLSX header does not match sheet '{sheet_name}': {self.output_path}")
+            else:
+                ws = workbook.create_sheet(title=excel_sheet_name)
+                ws.append(list(fieldnames))
+                changed = True
+            worksheets[sheet_name] = ws
+        self.workbook = workbook
+        self.worksheets = worksheets
+        if changed:
+            self.save()
 
     def writerow(self, sheet_name: str, row: Mapping[str, Any]):
         """
@@ -169,5 +208,4 @@ class MultiSheetXlsxWriter:
                 except OSError:
                     pass
         self._rows_since_save = 0
-
 

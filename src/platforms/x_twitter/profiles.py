@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from typing import Any
 
 from playwright.sync_api import sync_playwright
 
@@ -17,8 +18,8 @@ from src.core import (
     sanitize_xlsx_cell,
     should_stop,
     wait_if_paused,
-    XlsxRowWriter,
 )
+from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 from src.platforms.x_twitter.profile_tweets import navigate_to_profile_via_search
 
 OUTPUT_FIELDS = ["推文链接", "作者主页链接", "作者的名称", "账号ID", "粉丝数", "简介"]
@@ -409,7 +410,7 @@ def output_row(record: dict, fields: list[str]) -> dict:
     return {field: record.get(field, "") for field in fields}
 
 
-def update_writer_row(writer: XlsxRowWriter, row_number: int, record: dict, fields: list[str]) -> None:
+def update_writer_row(writer: Any, row_number: int, record: dict, fields: list[str]) -> None:
     row = output_row(record, fields)
     for column_number, field in enumerate(fields, start=1):
         writer.worksheet.cell(row=row_number, column=column_number).value = sanitize_xlsx_cell(row.get(field, ""))
@@ -441,6 +442,11 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
             if not links:
                 log_warn(log_callback, "TXT 中没有有效的推文链接。")
                 return
+        checkpoint = open_task_checkpoint(
+            "x_tweet_author_profiles",
+            {"input_mode": input_mode, "links": links},
+            log_callback=log_callback,
+        )
 
         with sync_playwright() as p:
             log_line(log_callback, "正在连接本地浏览器...")
@@ -452,8 +458,14 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
 
             tweet_page = context.new_page() if not is_profile_mode else None
             profile_page = context.new_page()
-            output_path = build_output_path("x", f"x_profiles_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profiles")
-            writer = XlsxRowWriter(output_path, output_fields)
+            default_output_path = build_output_path("x", f"x_profiles_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profiles")
+            output_path, writer = open_checkpointed_row_writer(
+                checkpoint,
+                default_output_path,
+                output_fields,
+                log_callback=log_callback,
+            )
+            checkpoint.add_output_path(output_path)
             best_by_author: dict[str, dict] = {}
             row_by_author: dict[str, int] = {}
             written_count = 0
@@ -464,6 +476,9 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
+                if checkpoint.is_completed(link):
+                    log_line(log_callback, f"[{index}/{len(links)}] 断点续跑跳过已完成链接：{link}")
+                    continue
                 
                 if is_profile_mode:
                     log_line(log_callback, f"[{index}/{len(links)}] 处理博主链接：{link}")
@@ -509,6 +524,7 @@ def run_scraper(txt_path: str, input_mode: str, cdp_port_or_url: str, log_callba
                         log_line(log_callback, f"  跳过：作者 {record['账号ID']} 已处理过。")
                     else:
                         log_line(log_callback, f"  跳过：作者 {record['账号ID']} 已有更高浏览量推文。")
+                checkpoint.mark_completed(link, {"output_path": output_path, "index": index, "account": account_key})
                 
                 # 按配置的冷却间隔应用随机休眠
                 if index % cooldown_every_val == 0:

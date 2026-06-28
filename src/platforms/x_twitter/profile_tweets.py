@@ -27,6 +27,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 
 
 def _parse_date_range(start_str: str, end_str: str):
@@ -770,10 +771,26 @@ def run_x_profile_tweets_spider(
         start_dt, end_dt = None, None
         if requested_time_limit:
             log_line(log_callback, "主页推文采集采用最新数量优先，已忽略时间窗口过滤。")
+        checkpoint = open_task_checkpoint(
+            "x_profile_tweets",
+            {
+                "profile_urls": profile_urls,
+                "max_tweets_per_author": max_tweets_per_author,
+                "max_scrolls": max_scrolls,
+            },
+            log_callback=log_callback,
+        )
 
         max_comments_val = 0
-        output_path = build_output_path("x", f"x_profile_tweets_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profile_tweets")
-        writer = XlsxRowWriter(output_path, CSV_FIELDS)
+        default_output_path = build_output_path("x", f"x_profile_tweets_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profile_tweets")
+        output_path, writer = open_checkpointed_row_writer(
+            checkpoint,
+            default_output_path,
+            CSV_FIELDS,
+            log_callback=log_callback,
+            writer_class=XlsxRowWriter,
+        )
+        checkpoint.add_output_path(output_path)
             
         row_offset = 0
 
@@ -804,6 +821,9 @@ def run_x_profile_tweets_spider(
 
                 profile_index += 1
                 username = extract_profile_username(profile_url)
+                if checkpoint.is_completed(profile_url):
+                    log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
+                    continue
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 开始处理博主主页：{profile_url}")
                 
                 try:
@@ -825,6 +845,10 @@ def run_x_profile_tweets_spider(
                         page, detail_page, profile_url, max_scrolls, limit_time_bool, start_dt, end_dt, get_comments_bool, max_comments_val, log_callback, stop_event, writer=writer, row_offset=row_offset, page_timeout=page_load_timeout_val, scroll_delay=scroll_delay_val, no_new_scroll_limit=no_new_scroll_limit_val, save_batch_size=save_batch_size_val, cooldown_min=cooldown_min_val, cooldown_max=cooldown_max_val, scroll_px=scroll_px_val, initial_load_delay=initial_load_delay_val, pause_event=pause_event, keyword=None, max_collect=max_tweets_per_author, consecutive_date_limit=consecutive_date_limit_val, guarantee_min_scrolls=guarantee_min_scrolls_val, page_already_loaded=True, date_window_size=date_window_size
                     )
                     log_line(log_callback, f"  完成 @{username} 最新推文采集：写入 {written_count} 条帖子。")
+                    checkpoint.mark_completed(
+                        profile_url,
+                        {"output_path": output_path, "profile_index": profile_index, "written_count": written_count},
+                    )
 
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  跳过：页面加载超时，请确认链接可打开且账号已登录。")
