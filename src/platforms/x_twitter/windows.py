@@ -143,7 +143,8 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
             ConfigParam("max_profile_scrolls", "作者主页最大滚动次数", kind="int", default=300, minimum=10, maximum=2000),
             ConfigParam("slice_days", "时间切片跨度(天)", kind="int", default=7, minimum=1, maximum=365),
             ConfigParam("page_load_timeout", "页面加载超时(毫秒)", kind="int", default=30000, minimum=10000, maximum=120000, step=1000),
-            ConfigParam("scroll_interval", "主页滚动间隔(秒)", kind="float", default=3.2, minimum=0.5, maximum=15.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_min", "主页滚动间隔最小(秒)", kind="float", default=2.4, minimum=0.5, maximum=30.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_max", "主页滚动间隔最大(秒)", kind="float", default=5.6, minimum=0.5, maximum=60.0, step=0.1, decimals=1),
             ConfigParam("no_new_scroll_limit", "连续无新增停止阈值", kind="int", default=10, minimum=2, maximum=50),
         ]
 
@@ -196,7 +197,7 @@ class XKeywordAuthorWorksWindow(SimpleToolWindow):
             "end_date": values["end_date"],
             "quick_mode": values.get("quick_mode", "是"),
         }
-        config = _x_config(values, ("max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "slice_days", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "search_refresh_count", "search_refresh_interval", "scroll_px", "initial_load_delay"))
+        config = _x_config(values, ("max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "slice_days", "page_load_timeout", "scroll_interval", "scroll_interval_min", "scroll_interval_max", "no_new_scroll_limit", "search_refresh_count", "search_refresh_interval", "scroll_px", "initial_load_delay"))
         return run_x_keyword_author_works_spider(
             _lines(values["keywords"]),
             adv_params,
@@ -312,7 +313,8 @@ class XProfileTweetsWindow(SimpleToolWindow):
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
             ConfigParam("page_load_timeout", "页面加载超时(ms)", kind="int", default=30000, minimum=5000, maximum=120000, step=1000),
-            ConfigParam("scroll_interval", "滚动间隔(秒)", kind="float", default=3.2, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_min", "滚动间隔最小(秒)", kind="float", default=2.4, minimum=0.5, maximum=30.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_max", "滚动间隔最大(秒)", kind="float", default=5.6, minimum=0.5, maximum=60.0, step=0.1, decimals=1),
             ConfigParam("scroll_px", "每次滚动像素", kind="int", default=2800, minimum=500, maximum=10000, step=100),
             ConfigParam("no_new_scroll_limit", "连续无新增停止阈值", kind="int", default=10, minimum=3, maximum=50,
                         tooltip="连续多少次滚动无新增帖子时停止。"),
@@ -343,7 +345,7 @@ class XProfileTweetsWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.profile_tweets import run_x_profile_tweets_spider
 
-        config = _x_config(values, ("max_tweets_per_author", "page_load_timeout", "scroll_interval", "no_new_scroll_limit", "max_scrolls", "save_batch_size", "cooldown_min", "cooldown_max", "scroll_px", "initial_load_delay"))
+        config = _x_config(values, ("max_tweets_per_author", "page_load_timeout", "scroll_interval", "scroll_interval_min", "scroll_interval_max", "no_new_scroll_limit", "max_scrolls", "save_batch_size", "cooldown_min", "cooldown_max", "scroll_px", "initial_load_delay"))
         return run_x_profile_tweets_spider(
             values["profile_urls"],
             values.get("keywords", ""),
@@ -372,7 +374,8 @@ class XProfileBundleWindow(SimpleToolWindow):
             ConfigParam("max_scrolls", "主页最大滚动次数", kind="int", default=80, minimum=1, maximum=2000),
             ConfigParam("initial_load_delay", "初始加载等待(秒)", kind="float", default=2.0, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
             ConfigParam("page_load_timeout", "页面加载超时(ms)", kind="int", default=30000, minimum=5000, maximum=120000, step=1000),
-            ConfigParam("scroll_interval", "滚动间隔(秒)", kind="float", default=3.2, minimum=0.5, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_min", "滚动间隔最小(秒)", kind="float", default=2.4, minimum=0.5, maximum=30.0, step=0.1, decimals=1),
+            ConfigParam("scroll_interval_max", "滚动间隔最大(秒)", kind="float", default=5.6, minimum=0.5, maximum=60.0, step=0.1, decimals=1),
             ConfigParam("scroll_px", "每次滚动像素", kind="int", default=2800, minimum=500, maximum=10000, step=100),
             ConfigParam("no_new_scroll_limit", "连续无新增停止阈值", kind="int", default=10, minimum=3, maximum=50),
         ]
@@ -400,7 +403,7 @@ class XProfileBundleWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.x_twitter.profile_bundle import run_x_profile_bundle_spider
 
-        config = _x_config(values, ("max_tweets_per_author", "max_scrolls", "initial_load_delay", "page_load_timeout", "scroll_interval", "scroll_px", "no_new_scroll_limit", "include_reposts"))
+        config = _x_config(values, ("max_tweets_per_author", "max_scrolls", "initial_load_delay", "page_load_timeout", "scroll_interval", "scroll_interval_min", "scroll_interval_max", "scroll_px", "no_new_scroll_limit", "include_reposts"))
         return run_x_profile_bundle_spider(
             values["profile_urls"],
             "否",

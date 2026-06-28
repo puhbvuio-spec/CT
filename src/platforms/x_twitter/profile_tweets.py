@@ -52,6 +52,8 @@ SAVE_BATCH_SIZE = 10
 COOLDOWN_MIN_SECONDS = 6.0
 COOLDOWN_MAX_SECONDS = 15.0
 DEFAULT_CONSECUTIVE_DATE_LIMIT = 3
+DEFAULT_SCROLL_DELAY_MIN = 2.4
+DEFAULT_SCROLL_DELAY_MAX = 5.6
 
 BLOCKED_PROFILE_NAMES = {
     "home",
@@ -165,6 +167,22 @@ def _wait_until_profile_ready(page, username: str, timeout_ms: int, stop_event=N
         if interruptible_sleep(0.5, stop_event):
             return False
     return _current_page_is_profile(page, username)
+
+
+def normalize_scroll_delay_range(config: dict | None, fallback: float = SCROLL_DELAY) -> tuple[float, float]:
+    config = config or {}
+    fallback_value = float(config.get("scroll_interval", fallback) or fallback)
+    min_delay = float(config.get("scroll_interval_min", fallback_value) or fallback_value)
+    max_delay = float(config.get("scroll_interval_max", fallback_value) or fallback_value)
+    min_delay = max(0.1, min_delay)
+    max_delay = max(0.1, max_delay)
+    if min_delay > max_delay:
+        min_delay, max_delay = max_delay, min_delay
+    return min_delay, max_delay
+
+
+def random_scroll_delay(min_delay: float, max_delay: float, extra: float = 0.0) -> float:
+    return random.uniform(float(min_delay), float(max_delay)) + max(0.0, float(extra or 0.0))
 
 
 def navigate_to_profile_via_search(
@@ -484,6 +502,8 @@ def collect_profile_tweets(
     row_offset: int = 0,
     page_timeout=None,
     scroll_delay=None,
+    scroll_delay_min=None,
+    scroll_delay_max=None,
     no_new_scroll_limit=None,
     save_batch_size=None,
     cooldown_min=None,
@@ -503,6 +523,14 @@ def collect_profile_tweets(
         page_timeout = PAGE_LOAD_TIMEOUT
     if scroll_delay is None:
         scroll_delay = SCROLL_DELAY
+    if scroll_delay_min is None:
+        scroll_delay_min = scroll_delay
+    if scroll_delay_max is None:
+        scroll_delay_max = scroll_delay
+    scroll_delay_min, scroll_delay_max = normalize_scroll_delay_range(
+        {"scroll_interval_min": scroll_delay_min, "scroll_interval_max": scroll_delay_max},
+        fallback=scroll_delay,
+    )
     if scroll_px is None:
         scroll_px = SCROLL_PX
     if initial_load_delay is None:
@@ -572,7 +600,10 @@ def collect_profile_tweets(
             return tweets
         raise
     limit_note = f"，最多采集 {max_collect} 条" if max_collect is not None else ""
-    log_line(log_callback, f"  开始采集 @{username} 主页帖子，最多滚动 {max_scrolls} 次{limit_note}。")
+    log_line(
+        log_callback,
+        f"  开始采集 @{username} 主页帖子，最多滚动 {max_scrolls} 次{limit_note}，滚动等待 {scroll_delay_min:.1f}-{scroll_delay_max:.1f} 秒随机浮动。",
+    )
 
     for scroll_index in range(max_scrolls):
         if should_stop(stop_event):
@@ -754,7 +785,8 @@ def collect_profile_tweets(
             break
 
         page.evaluate(f"window.scrollBy(0, {scroll_px})")
-        interruptible_sleep(scroll_delay + 1.0 if no_new_count else scroll_delay, stop_event)
+        delay = random_scroll_delay(scroll_delay_min, scroll_delay_max, extra=1.0 if no_new_count else 0.0)
+        interruptible_sleep(delay, stop_event)
 
     if writer and pending_rows:
         if hasattr(writer, "writerow") and hasattr(writer, "worksheets"):
@@ -797,7 +829,10 @@ def run_x_profile_tweets_spider(
     if config is None:
         config = {}
     page_load_timeout_val = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
-    scroll_delay_val = float(config.get("scroll_interval", SCROLL_DELAY))
+    scroll_delay_min_val, scroll_delay_max_val = normalize_scroll_delay_range(
+        config,
+        fallback=config.get("scroll_interval", SCROLL_DELAY),
+    )
     no_new_scroll_limit_val = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
     save_batch_size_val = int(config.get("save_batch_size", SAVE_BATCH_SIZE))
     cooldown_min_val = float(config.get("cooldown_min", COOLDOWN_MIN_SECONDS))
@@ -900,7 +935,7 @@ def run_x_profile_tweets_spider(
                         log_line(log_callback, "  已忽略补充关键词：主页推文采集现在只取最新作品样本。")
 
                     _, row_offset, written_count = collect_profile_tweets(
-                        page, detail_page, profile_url, max_scrolls, limit_time_bool, start_dt, end_dt, get_comments_bool, max_comments_val, log_callback, stop_event, writer=writer, row_offset=row_offset, page_timeout=page_load_timeout_val, scroll_delay=scroll_delay_val, no_new_scroll_limit=no_new_scroll_limit_val, save_batch_size=save_batch_size_val, cooldown_min=cooldown_min_val, cooldown_max=cooldown_max_val, scroll_px=scroll_px_val, initial_load_delay=initial_load_delay_val, pause_event=pause_event, keyword=None, max_collect=max_tweets_per_author, consecutive_date_limit=consecutive_date_limit_val, guarantee_min_scrolls=guarantee_min_scrolls_val, page_already_loaded=True, date_window_size=date_window_size
+                        page, detail_page, profile_url, max_scrolls, limit_time_bool, start_dt, end_dt, get_comments_bool, max_comments_val, log_callback, stop_event, writer=writer, row_offset=row_offset, page_timeout=page_load_timeout_val, scroll_delay_min=scroll_delay_min_val, scroll_delay_max=scroll_delay_max_val, no_new_scroll_limit=no_new_scroll_limit_val, save_batch_size=save_batch_size_val, cooldown_min=cooldown_min_val, cooldown_max=cooldown_max_val, scroll_px=scroll_px_val, initial_load_delay=initial_load_delay_val, pause_event=pause_event, keyword=None, max_collect=max_tweets_per_author, consecutive_date_limit=consecutive_date_limit_val, guarantee_min_scrolls=guarantee_min_scrolls_val, page_already_loaded=True, date_window_size=date_window_size
                     )
                     log_line(log_callback, f"  完成 @{username} 最新推文采集：写入 {written_count} 条帖子。")
                     checkpoint.mark_completed(

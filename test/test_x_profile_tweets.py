@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.platforms.x_twitter.profile_tweets import (
     DEFAULT_PROFILE_TWEET_LIMIT,
     build_profile_search_url,
+    normalize_scroll_delay_range,
     run_x_profile_tweets_spider,
 )
 from src.platforms.x_twitter.windows import XProfileTweetsWindow, _x_cdp_url, _x_config
@@ -34,6 +35,12 @@ class TestXProfileTweetsLogic(unittest.TestCase):
 
         self.assertEqual(defaults["max_tweets_per_author"], DEFAULT_PROFILE_TWEET_LIMIT)
         self.assertEqual(defaults["max_scrolls"], 80)
+        self.assertEqual(defaults["scroll_interval_min"], 2.4)
+        self.assertEqual(defaults["scroll_interval_max"], 5.6)
+
+    def test_scroll_delay_range_supports_old_and_swapped_config(self):
+        self.assertEqual(normalize_scroll_delay_range({"scroll_interval": 3.2}), (3.2, 3.2))
+        self.assertEqual(normalize_scroll_delay_range({"scroll_interval_min": 6.0, "scroll_interval_max": 2.0}), (2.0, 6.0))
 
     def test_profile_search_url_uses_user_search(self):
         self.assertEqual(

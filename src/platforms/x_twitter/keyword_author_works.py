@@ -40,6 +40,7 @@ from src.platforms.x_twitter.profile_tweets import (
     SCROLL_PX,
     collect_profile_tweets,
     navigate_to_profile_via_search,
+    normalize_scroll_delay_range,
 )
 from src.platforms.x_twitter.profiles import (
     extract_author_from_article,
@@ -354,7 +355,10 @@ def run_x_keyword_author_works_spider(
     max_search_scrolls = int(config.get("max_search_scrolls", config.get("max_scrolls", MAX_SEARCH_SCROLLS)))
     max_profile_scrolls = int(config.get("max_profile_scrolls", DEFAULT_MAX_SCROLLS))
     page_timeout = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
-    scroll_interval = float(config.get("scroll_interval", SCROLL_DELAY))
+    scroll_interval_min, scroll_interval_max = normalize_scroll_delay_range(
+        config,
+        fallback=config.get("scroll_interval", SCROLL_DELAY),
+    )
     no_new_scroll_limit = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
     slice_days = int(config.get("slice_days", 7))
     scroll_px = int(config.get("scroll_px", SCROLL_PX))
@@ -490,7 +494,8 @@ def run_x_keyword_author_works_spider(
                         stop_event=stop_event,
                         writer=None,
                         page_timeout=page_timeout,
-                        scroll_delay=scroll_interval,
+                        scroll_delay_min=scroll_interval_min,
+                        scroll_delay_max=scroll_interval_max,
                         no_new_scroll_limit=no_new_scroll_limit,
                         pause_event=pause_event,
                         max_collect=max_profile_works,

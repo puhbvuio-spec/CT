@@ -31,6 +31,7 @@ from src.platforms.x_twitter.profile_tweets import (
     collect_profile_tweets,
     extract_profile_username,
     navigate_to_profile_via_search,
+    normalize_scroll_delay_range,
     parse_profile_urls,
     row_from_tweet,
 )
@@ -155,7 +156,10 @@ def run_x_profile_bundle_spider(
             return
 
         page_timeout = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
-        scroll_delay = float(config.get("scroll_interval", SCROLL_DELAY))
+        scroll_delay_min, scroll_delay_max = normalize_scroll_delay_range(
+            config,
+            fallback=config.get("scroll_interval", SCROLL_DELAY),
+        )
         no_new_scroll_limit = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
         max_scrolls = int(config.get("max_scrolls", DEFAULT_MAX_SCROLLS))
         max_tweets_per_author = max(1, int(config.get("max_tweets_per_author", DEFAULT_PROFILE_TWEET_LIMIT)))
@@ -274,7 +278,8 @@ def run_x_profile_bundle_spider(
                         stop_event=stop_event,
                         writer=None,
                         page_timeout=page_timeout,
-                        scroll_delay=scroll_delay,
+                        scroll_delay_min=scroll_delay_min,
+                        scroll_delay_max=scroll_delay_max,
                         no_new_scroll_limit=no_new_scroll_limit,
                         pause_event=pause_event,
                         max_collect=max_tweets_per_author,
