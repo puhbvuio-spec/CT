@@ -606,11 +606,23 @@ class SimpleToolWindow(QWidget):
         else:
             self.append_log("任务完成。")
 
+    @staticmethod
+    def _friendly_error_message(message: str) -> str:
+        text = str(message or "")
+        if "PlaywrightContextManager" in text and "_playwright" in text:
+            return (
+                f"{text}\n\n"
+                "这通常是当前虚拟环境的 Python 版本与 Playwright 不兼容导致的。"
+                "请安装 Python 3.12 或 3.11 后，重新运行 install_or_update.bat 重建环境。"
+            )
+        return text
+
     def _finish_error(self, message: str) -> None:
         """主线程槽：处理任务崩溃，恢复按钮状态，追加日志并弹出报错详情。"""
         self._set_state("idle")
-        self.append_log(f"运行失败：{message}")
-        QMessageBox.critical(self, "运行失败", message)
+        display_message = self._friendly_error_message(message)
+        self.append_log(f"运行失败：{display_message}")
+        QMessageBox.critical(self, "运行失败", display_message)
 
     def eventFilter(self, obj, event):
         """轮播过滤器，阻止下拉列表/数字组件响应滚轮滚动，防止操作界面发生意外滚动。"""

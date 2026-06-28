@@ -183,30 +183,41 @@ exit /b 0
 
 :find_python
 set "PY_CMD="
+set "PY_VERSION_TEXT="
 where py >nul 2>nul
 if not errorlevel 1 (
-    py -3 --version >nul 2>nul
-    if not errorlevel 1 set "PY_CMD=py -3"
+    for %%V in (3.12 3.11 3.10 3.13) do (
+        if not defined PY_CMD (
+            py -%%V -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+            if not errorlevel 1 set "PY_CMD=py -%%V"
+        )
+    )
+    if not defined PY_CMD (
+        py -3 -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+        if not errorlevel 1 set "PY_CMD=py -3"
+    )
 )
 if not defined PY_CMD (
     where python >nul 2>nul
     if not errorlevel 1 (
-        python --version >nul 2>nul
+        python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
         if not errorlevel 1 set "PY_CMD=python"
     )
 )
 if not defined PY_CMD (
-    echo [ERROR] Python 3 was not found.
-    echo Install Python 3.10+ first: https://www.python.org/downloads/windows/
+    echo [ERROR] Python 3.10-3.13 was not found.
+    echo Python 3.14 is not supported by the current Playwright/PyQt runtime stack.
+    echo Install Python 3.12 or 3.11 first: https://www.python.org/downloads/windows/
     exit /b 1
 )
-for /f "tokens=*" %%V in ('!PY_CMD! --version 2^>^&1') do echo Python: %%V
+for /f "tokens=*" %%V in ('!PY_CMD! --version 2^>^&1') do set "PY_VERSION_TEXT=%%V"
+echo Python: !PY_VERSION_TEXT!
 exit /b 0
 
 :check_python_version
-!PY_CMD! -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+!PY_CMD! -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)"
 if errorlevel 1 (
-    echo [ERROR] Python 3.10 or newer is required.
+    echo [ERROR] Python 3.10-3.13 is required. Python 3.14 is currently unsupported.
     exit /b 1
 )
 exit /b 0
@@ -442,9 +453,31 @@ exit /b 0
 :setup_venv
 set "VENV_PY=%INSTALL_DIR%\venv\Scripts\python.exe"
 if exist "%VENV_PY%" (
+    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+    if errorlevel 1 (
+        echo.
+        for /f "tokens=*" %%V in ('"%VENV_PY%" --version 2^>^&1') do echo [WARN] Existing virtual environment uses unsupported Python: %%V
+        set "OLD_VENV=%INSTALL_DIR%\venv_unsupported_%RANDOM%%RANDOM%"
+        echo Moving old venv aside:
+        echo   "%INSTALL_DIR%\venv"
+        echo   -^> "!OLD_VENV!"
+        move /y "%INSTALL_DIR%\venv" "!OLD_VENV!" >nul
+        if errorlevel 1 (
+            echo [ERROR] Failed to move unsupported virtual environment aside.
+            exit /b 1
+        )
+    ) else (
+        echo.
+        echo Virtual environment: "%INSTALL_DIR%\venv"
+        exit /b 0
+    )
+)
+if exist "%INSTALL_DIR%\venv" (
     echo.
-    echo Virtual environment: "%INSTALL_DIR%\venv"
-    exit /b 0
+    echo [ERROR] Existing venv directory is present but no usable python.exe was found:
+    echo        "%INSTALL_DIR%\venv"
+    echo        Rename or remove it, then rerun this installer.
+    exit /b 1
 )
 echo.
 echo Creating virtual environment...

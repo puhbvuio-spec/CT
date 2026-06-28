@@ -38,6 +38,17 @@ if not exist "%PY%" (
     )
 )
 
+"%PY%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+if errorlevel 1 (
+    echo.
+    for /f "tokens=*" %%V in ('"%PY%" --version 2^>^&1') do echo [ERROR] Unsupported venv Python: %%V
+    echo This app currently requires Python 3.10-3.13. Python 3.14 can break Playwright.
+    echo Please rerun install_or_update.bat after installing Python 3.12 or 3.11.
+    if "%CHECK_ONLY%"=="1" exit /b 1
+    pause
+    exit /b 1
+)
+
 if "%CHECK_ONLY%"=="1" (
     "%PY%" -c "import PyQt5, openpyxl, playwright; import src.studio.qt_app; print('Runtime import OK')"
     exit /b %ERRORLEVEL%
