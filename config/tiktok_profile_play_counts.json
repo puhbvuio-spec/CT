@@ -1,0 +1,6 @@
+{
+  "page_load_timeout": 45000,
+  "scroll_interval": 2.5,
+  "no_new_scroll_limit": 10,
+  "max_scrolls": 200
+}

@@ -1,0 +1,17 @@
+{
+  "max_results": 5000,
+  "youtube_search_method": "仅API（消耗配额）",
+  "youtube_search_batch_size": 50,
+  "youtube_date_chunk_days": 2,
+  "youtube_date_chunk_hours": 2,
+  "youtube_video_batch_size": 50,
+  "youtube_language_filter": "fr, ru, de, es",
+  "youtube_comment_mode": "快速模式",
+  "youtube_comment_workers": 5,
+  "youtube_browser_scroll_px": 2500,
+  "youtube_browser_scroll_delay": 1.0,
+  "youtube_browser_max_scrolls": 100,
+  "youtube_browser_page_timeout": 45000,
+  "youtube_browser_no_new_limit": 8,
+  "comment_top_limit": 100
+}

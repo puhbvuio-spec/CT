@@ -1,0 +1,5 @@
+{
+  "temperature": 0.1,
+  "sleep_seconds": 0.5,
+  "trust_local_negative_aigc": false
+}

@@ -1,0 +1,7 @@
+{
+  "max_scan_comments": 500,
+  "comment_top_limit": 100,
+  "youtube_api_page_size": 100,
+  "youtube_comment_mode": "快速模式",
+  "youtube_comment_workers": 5
+}

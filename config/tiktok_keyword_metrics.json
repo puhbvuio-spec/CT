@@ -1,0 +1,9 @@
+{
+  "max_parallel_tabs": 3,
+  "max_comment_tabs": 1,
+  "max_metrics_tabs": 1,
+  "max_queue_size": 5000,
+  "max_videos": 1000,
+  "max_candidates": 3000,
+  "max_search_scrolls": 200
+}

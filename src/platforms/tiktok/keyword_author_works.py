@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+
+try:
+    from playwright.sync_api import sync_playwright
+except ModuleNotFoundError:  # pragma: no cover
+    sync_playwright = None
+
+from src.core import (
+    XlsxRowWriter,
+    build_output_path,
+    connect_existing_chromium,
+    ensure_chrome_for_cdp,
+    interruptible_sleep,
+    log_error,
+    log_line,
+    log_warn,
+    should_stop,
+    wait_if_paused,
+)
+from src.platforms.tiktok.keyword import (
+    MAX_SEARCH_SCROLLS,
+    SEARCH_SCROLL_PAUSE,
+    collect_visible_video_items,
+    derive_publish_time_from_video_url,
+    dynamic_search_scroll_limit,
+    extract_video_row,
+    in_date_range,
+    open_search_page,
+    parse_date_range,
+    trigger_search_lazy_load,
+)
+from src.platforms.tiktok.profile_videos import (
+    DEFAULT_MAX_SCROLLS,
+    DETAIL_DELAY_MAX_SECONDS,
+    DETAIL_DELAY_MIN_SECONDS,
+    DETAIL_LOAD_TIMEOUT,
+    NO_NEW_SCROLL_LIMIT,
+    PAGE_LOAD_TIMEOUT,
+    SCROLL_INTERVAL_SECONDS,
+    SCROLL_PX,
+    collect_profile_video_details,
+)
+from src.platforms.tiktok.profiles import (
+    extract_profile_row,
+    normalize_profile_url,
+    profile_id_from_url,
+)
+
+
+CSV_FIELDS = [
+    "搜索词",
+    "命中作品数",
+    "命中作品链接列表",
+    "作者主页链接",
+    "作者名称",
+    "作者ID",
+    "粉丝数",
+    "作者简介",
+    "采集作品数",
+    "时间窗口内作品数",
+    "作品标题列表",
+    "作品链接列表",
+    "作品发布时间列表",
+]
+QUICK_PROFILE_WORK_LIMIT = 50
+
+
+def quick_mode_enabled(value: str | None) -> bool:
+    return str(value or "是").strip() == "是"
+
+
+def resolve_profile_work_limit(config: dict | None, quick_mode_value: str | None = "是") -> int:
+    configured_limit = int((config or {}).get("max_profile_works_per_author", QUICK_PROFILE_WORK_LIMIT))
+    return QUICK_PROFILE_WORK_LIMIT if quick_mode_enabled(quick_mode_value) else configured_limit
+
+
+@dataclass
+class TikTokAuthorSeed:
+    profile_url: str
+    author_name: str = ""
+    author_id: str = ""
+    followers: str = ""
+    bio: str = ""
+    keywords: list[str] = field(default_factory=list)
+    seed_links: list[str] = field(default_factory=list)
+
+
+def ensure_playwright_available() -> None:
+    if sync_playwright is None:
+        raise ModuleNotFoundError("playwright is required for TikTok keyword author works scraping")
+
+
+def _author_key(profile_url: str, author_id: str = "") -> str:
+    normalized = normalize_profile_url(profile_url) or profile_url
+    handle = (author_id or "").strip().lower().lstrip("@")
+    if handle:
+        return handle
+    match = re.search(r"tiktok\.com/@([^/?#]+)", normalized or "", re.I)
+    return match.group(1).lower() if match else (normalized or "").lower()
+
+
+def merge_seed_author(authors: dict[str, TikTokAuthorSeed], keyword: str, video_url: str, row: dict[str, str]) -> TikTokAuthorSeed | None:
+    profile_url = normalize_profile_url(row.get("博主主页链接", ""))
+    author_id = row.get("博主ID", "")
+    if not profile_url and author_id:
+        profile_url = normalize_profile_url(f"https://www.tiktok.com/{author_id}")
+    if not profile_url:
+        return None
+
+    key = _author_key(profile_url, author_id)
+    seed = authors.get(key)
+    if seed is None:
+        seed = TikTokAuthorSeed(
+            profile_url=profile_url,
+            author_name=row.get("博主名称", ""),
+            author_id=author_id or profile_id_from_url(profile_url),
+            followers=row.get("粉丝量", ""),
+            bio=row.get("作者简介", ""),
+        )
+        authors[key] = seed
+    if keyword and keyword not in seed.keywords:
+        seed.keywords.append(keyword)
+    if video_url and video_url not in seed.seed_links:
+        seed.seed_links.append(video_url)
+    if not seed.author_name and row.get("博主名称"):
+        seed.author_name = row["博主名称"]
+    if not seed.author_id and (author_id or profile_id_from_url(profile_url)):
+        seed.author_id = author_id or profile_id_from_url(profile_url)
+    if not seed.followers and row.get("粉丝量"):
+        seed.followers = row["粉丝量"]
+    if not seed.bio and row.get("作者简介"):
+        seed.bio = row["作者简介"]
+    return seed
+
+
+def _cell_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _join_cell(values) -> str:
+    cleaned = [_cell_text(value) for value in values if _cell_text(value)]
+    return "\n".join(cleaned)
+
+
+def _count_works_in_window(
+    works: list[dict[str, str]],
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> int:
+    if not limit_time_bool or not start_dt or not end_dt:
+        return len(works)
+    return sum(1 for work in works if in_date_range(work.get("published_at", ""), start_dt, end_dt))
+
+
+def build_author_row(
+    seed: TikTokAuthorSeed,
+    profile_record: dict[str, str],
+    works: list[dict[str, str]],
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> dict[str, str]:
+    titles = [work.get("desc", "") for work in works]
+    links = [work.get("video_url", "") for work in works]
+    publish_times = [work.get("published_at", "") for work in works]
+    in_window_count = _count_works_in_window(works, limit_time_bool, start_dt, end_dt)
+    return {
+        "搜索词": _join_cell(seed.keywords),
+        "命中作品数": str(len(seed.seed_links)),
+        "命中作品链接列表": _join_cell(seed.seed_links),
+        "作者主页链接": profile_record.get("博主主页链接") or seed.profile_url,
+        "作者名称": profile_record.get("博主名称") or seed.author_name,
+        "作者ID": profile_record.get("博主ID") or seed.author_id,
+        "粉丝数": profile_record.get("粉丝量") or seed.followers,
+        "作者简介": profile_record.get("作者简介") or seed.bio,
+        "采集作品数": str(len(works)),
+        "时间窗口内作品数": str(in_window_count),
+        "作品标题列表": _join_cell(titles),
+        "作品链接列表": _join_cell(links),
+        "作品发布时间列表": _join_cell(publish_times),
+    }
+
+
+def collect_seed_authors(
+    search_page,
+    detail_page,
+    keywords: list[str],
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+    limit_time_bool: bool,
+    log_callback,
+    stop_event=None,
+    pause_event=None,
+    max_seed_works: int = 300,
+    max_authors: int = 100,
+    max_search_scrolls: int = MAX_SEARCH_SCROLLS,
+    search_scroll_pause: float = SEARCH_SCROLL_PAUSE,
+    no_new_scroll_limit: int = 12,
+) -> dict[str, TikTokAuthorSeed]:
+    authors: dict[str, TikTokAuthorSeed] = {}
+    seen_links: set[str] = set()
+    inspected_count = 0
+
+    for keyword_index, keyword in enumerate(keywords, 1):
+        if inspected_count >= max_seed_works or should_stop(stop_event):
+            break
+        if wait_if_paused(pause_event, stop_event):
+            break
+
+        log_line(log_callback, f"[{keyword_index}/{len(keywords)}] 搜索作者种子：{keyword}")
+        open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log_callback)
+        scroll_limit = dynamic_search_scroll_limit(max_seed_works, max_search_scrolls)
+        no_new_rounds = 0
+
+        for scroll_index in range(scroll_limit):
+            if inspected_count >= max_seed_works or should_stop(stop_event):
+                break
+            if wait_if_paused(pause_event, stop_event):
+                break
+
+            new_items = collect_visible_video_items(search_page, seen_links)
+            if not new_items:
+                no_new_rounds += 1
+            else:
+                no_new_rounds = 0
+
+            for item in new_items:
+                if inspected_count >= max_seed_works or should_stop(stop_event):
+                    break
+                video_url = item.get("视频链接", "")
+                if not video_url:
+                    continue
+                try:
+                    derived_publish_time = derive_publish_time_from_video_url(video_url)
+                    if limit_time_bool and start_dt and end_dt and derived_publish_time and not in_date_range(derived_publish_time, start_dt, end_dt):
+                        inspected_count += 1
+                        log_line(log_callback, f"  跳过种子：视频 ID 时间不在范围内（{derived_publish_time}）")
+                        continue
+
+                    row = extract_video_row(
+                        detail_page,
+                        keyword,
+                        video_url,
+                        item.get("播放量", ""),
+                        profile_url=item.get("博主主页链接", ""),
+                        stop_event=stop_event,
+                    )
+                    inspected_count += 1
+                    if limit_time_bool and start_dt and end_dt and not in_date_range(row.get("发布时间", ""), start_dt, end_dt):
+                        log_line(log_callback, f"  跳过种子：发布时间不在范围内（{row.get('发布时间') or '未解析'}）")
+                        continue
+                    author_key = _author_key(row.get("博主主页链接", ""), row.get("博主ID", ""))
+                    if len(authors) >= max_authors and author_key not in authors:
+                        continue
+                    if merge_seed_author(authors, keyword, video_url, row):
+                        log_line(log_callback, f"  发现作者种子 {inspected_count}/{max_seed_works}: {video_url}")
+                except Exception as exc:
+                    inspected_count += 1
+                    log_warn(log_callback, f"  跳过一个候选视频：{exc}")
+
+            if no_new_rounds >= no_new_scroll_limit and scroll_index >= 5:
+                break
+            trigger_search_lazy_load(search_page)
+            if interruptible_sleep(search_scroll_pause, stop_event):
+                break
+
+    return authors
+
+
+def run_tiktok_keyword_author_works_spider(
+    keywords_list,
+    limit_time_str,
+    start_date,
+    end_date,
+    cdp_port_or_url,
+    log_callback,
+    finish_callback,
+    stop_event=None,
+    pause_event=None,
+    config=None,
+):
+    ensure_playwright_available()
+    if config is None:
+        config = {}
+
+    max_seed_works = int(config.get("max_seed_works", 300))
+    max_authors = int(config.get("max_authors", 100))
+    quick_mode_value = config.get("quick_mode", "是")
+    max_profile_works = resolve_profile_work_limit(config, quick_mode_value)
+    max_search_scrolls = int(config.get("max_search_scrolls", MAX_SEARCH_SCROLLS))
+    max_profile_scrolls = int(config.get("max_profile_scrolls", config.get("max_scrolls", DEFAULT_MAX_SCROLLS)))
+    page_timeout = int(config.get("page_load_timeout", PAGE_LOAD_TIMEOUT))
+    search_scroll_pause = float(config.get("scroll_interval", SEARCH_SCROLL_PAUSE))
+    profile_scroll_interval = float(config.get("profile_scroll_interval", SCROLL_INTERVAL_SECONDS))
+    no_new_scroll_limit = int(config.get("no_new_scroll_limit", NO_NEW_SCROLL_LIMIT))
+    scroll_px = int(config.get("scroll_px", SCROLL_PX))
+    detail_load_timeout = int(config.get("detail_load_timeout", DETAIL_LOAD_TIMEOUT))
+    detail_delay_min = float(config.get("detail_delay_min", DETAIL_DELAY_MIN_SECONDS))
+    detail_delay_max = float(config.get("detail_delay_max", DETAIL_DELAY_MAX_SECONDS))
+
+    completed_path = None
+    search_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
+    try:
+        limit_time_bool = limit_time_str == "是"
+        start_dt = end_dt = None
+        if limit_time_bool:
+            start_dt, end_dt = parse_date_range(start_date, end_date)
+
+        if quick_mode_enabled(quick_mode_value):
+            log_line(log_callback, f"快速模式已开启：作者主页作品只取最新 {QUICK_PROFILE_WORK_LIMIT} 条。")
+        ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
+        with sync_playwright() as playwright:
+            _, context = connect_existing_chromium(playwright, cdp_port_or_url)
+            search_page = context.new_page()
+            seed_detail_page = context.new_page()
+            profile_info_page = context.new_page()
+            profile_page = context.new_page()
+            works_detail_page = context.new_page()
+
+            authors = collect_seed_authors(
+                search_page,
+                seed_detail_page,
+                list(keywords_list),
+                start_dt,
+                end_dt,
+                limit_time_bool,
+                log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                max_seed_works=max_seed_works,
+                max_authors=max_authors,
+                max_search_scrolls=max_search_scrolls,
+                search_scroll_pause=search_scroll_pause,
+                no_new_scroll_limit=no_new_scroll_limit,
+            )
+            if not authors:
+                log_warn(log_callback, "没有从关键词结果中发现有效作者。")
+                return
+
+            output_path = build_output_path(
+                "tiktok",
+                f"tiktok_keyword_author_works_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+                channel="keyword_author_works",
+            )
+            writer = XlsxRowWriter(output_path, CSV_FIELDS, autosave_every=5)
+
+            for index, seed in enumerate(list(authors.values())[:max_authors], 1):
+                if should_stop(stop_event):
+                    break
+                if wait_if_paused(pause_event, stop_event):
+                    break
+                log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入博主主页：{seed.profile_url}")
+                try:
+                    profile_record = extract_profile_row(
+                        profile_info_page,
+                        seed.profile_url,
+                        page_load_timeout=page_timeout,
+                        captcha_wait=8,
+                        stop_event=stop_event,
+                    )
+                except Exception as exc:
+                    log_warn(log_callback, f"  博主信息补充失败：{exc}")
+                    profile_record = {
+                        "博主主页链接": seed.profile_url,
+                        "博主名称": seed.author_name,
+                        "博主ID": seed.author_id,
+                        "粉丝量": seed.followers,
+                        "作者简介": seed.bio,
+                    }
+
+                try:
+                    works = collect_profile_video_details(
+                        profile_page,
+                        works_detail_page,
+                        seed.profile_url,
+                        None,
+                        None,
+                        False,
+                        log_callback,
+                        stop_event=stop_event,
+                        pause_event=pause_event,
+                        max_scrolls=max_profile_scrolls,
+                        max_collect=max_profile_works,
+                        page_load_timeout=page_timeout,
+                        scroll_interval=profile_scroll_interval,
+                        no_new_scroll_limit=no_new_scroll_limit,
+                        scroll_px=scroll_px,
+                        detail_load_timeout=detail_load_timeout,
+                        detail_delay_min=detail_delay_min,
+                        detail_delay_max=detail_delay_max,
+                    )
+                except Exception as exc:
+                    log_warn(log_callback, f"  博主作品采集失败：{exc}")
+                    works = []
+
+                writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                log_line(log_callback, f"  写入博主：{profile_record.get('博主ID') or seed.author_id or seed.profile_url}，作品 {len(works)} 条。")
+
+            writer.save()
+            completed_path = output_path
+            log_line(log_callback, f"完成，已保存：{output_path}")
+    except Exception as exc:
+        log_error(log_callback, f"运行失败：{exc}")
+    finally:
+        for page in (search_page, seed_detail_page, profile_info_page, profile_page, works_detail_page):
+            try:
+                if page is not None and not page.is_closed():
+                    page.close()
+            except Exception:
+                pass
+        finish_callback(completed_path)

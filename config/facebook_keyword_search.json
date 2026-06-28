@@ -1,0 +1,6 @@
+{
+  "max_posts": 100,
+  "max_scrolls": 200,
+  "page_load_timeout": 60000,
+  "scroll_delay": 2000
+}

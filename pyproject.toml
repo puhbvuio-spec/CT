@@ -1,0 +1,11 @@
+[tool.ruff]
+line-length = 150
+exclude = [
+    ".venv",
+]
+
+[tool.ruff.lint]
+ignore = [
+    "E402", # module level import not at top of file
+    "F841", # local variable assigned but never used (useful but too strict for ui tests like app = QApplication)
+]

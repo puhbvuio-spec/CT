@@ -1,0 +1,9 @@
+{
+  "tool_id": "x_tweet_author_profiles",
+  "name": "X 博主信息",
+  "category": "X/Twitter",
+  "summary": "从 TXT 读取推文链接，提取博主主页、名称、账号ID和粉丝数。",
+  "entrypoint": "src.platforms.x_twitter.windows.XProfilesWindow",
+  "implementation_path": "platforms/x_twitter/profiles.py",
+  "tags": ["X", "Twitter", "tweet", "profile", "followers"]
+}

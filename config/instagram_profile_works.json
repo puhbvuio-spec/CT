@@ -1,0 +1,13 @@
+{
+  "max_works": 5000,
+  "page_load_timeout": 45000,
+  "scroll_interval": 3.0,
+  "scroll_px": 2600,
+  "no_new_scroll_limit": 8,
+  "max_scrolls": 200,
+  "save_batch_size": 10,
+  "cooldown_min": 10.0,
+  "cooldown_max": 25.0,
+  "detail_delay_min": 3.0,
+  "detail_delay_max": 7.0
+}

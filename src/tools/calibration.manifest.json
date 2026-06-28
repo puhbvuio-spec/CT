@@ -1,0 +1,9 @@
+{
+  "tool_id": "keyword_coverage_calibration",
+  "name": "关键词覆盖率校准",
+  "category": "工具",
+  "summary": "自动执行关键词组合测试并计算其在多平台的覆盖率百分比，用于保证爬虫数据具备横向可比性。",
+  "entrypoint": "src.tools.windows.CalibrationToolWindow",
+  "implementation_path": "tools/calibration.py",
+  "tags": ["Tools", "Calibration", "Coverage"]
+}

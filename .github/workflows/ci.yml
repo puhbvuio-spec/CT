@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff PyQt5
+
+    - name: Run Ruff Linter
+      run: |
+        ruff check .
+
+    - name: Run UI Logic Tests
+      run: |
+        python test/test_visibility.py
+
+    - name: Run Keyword Fixes Tests
+      run: |
+        python test/test_keyword_fixes.py

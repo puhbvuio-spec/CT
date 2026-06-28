@@ -1,0 +1,13 @@
+{
+  "max_parallel_tabs": 3,
+  "max_comment_tabs": 1,
+  "max_queue_size": 3000,
+  "slice_days": 7,
+  "search_page_timeout": 45000,
+  "no_new_scroll_limit": 3,
+  "comment_no_new_scroll_limit": 2,
+  "search_refresh_count": 3,
+  "search_refresh_interval": 5.0,
+  "comment_refresh_count": 3,
+  "comment_refresh_interval": 5.0
+}

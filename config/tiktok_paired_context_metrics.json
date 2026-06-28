@@ -1,0 +1,7 @@
+{
+  "context_size": 5,
+  "api_page_size": 35,
+  "max_api_pages": 10,
+  "max_profile_scrolls": 80,
+  "scroll_interval": 0.8
+}

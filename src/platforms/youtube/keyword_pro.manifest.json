@@ -1,0 +1,9 @@
+{
+  "tool_id": "youtube_keyword_mining_pro",
+  "name": "YouTube 关键词搜索 Pro",
+  "category": "YouTube",
+  "summary": "关键词搜索增强版：新增评论数、粉丝数、简介、视频类型，支持热度快照",
+  "entrypoint": "src.platforms.youtube.windows.YouTubeKeywordProWindow",
+  "implementation_path": "platforms/youtube/keyword_pro.py",
+  "tags": ["YouTube", "search", "keyword", "pro"]
+}

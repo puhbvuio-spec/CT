@@ -1,0 +1,9 @@
+{
+  "tool_id": "x_profile_tweets",
+  "name": "X 博主推文采集",
+  "category": "X/Twitter",
+  "summary": "按博主主页链接滚动采集该博主发布的推文，导出序号、推文ID、发布时间、推文内容和推文链接。",
+  "entrypoint": "src.platforms.x_twitter.windows.XProfileTweetsWindow",
+  "implementation_path": "platforms/x_twitter/profile_tweets.py",
+  "tags": ["X", "Twitter", "profile", "tweets", "timeline"]
+}

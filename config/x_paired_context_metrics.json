@@ -1,0 +1,6 @@
+{
+  "context_size": 5,
+  "max_profile_scrolls": 45,
+  "scroll_interval": 3.8,
+  "page_load_timeout": 45000
+}

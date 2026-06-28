@@ -1,0 +1,6 @@
+{
+  "comment_top_limit": 100,
+  "page_load_timeout": 45000,
+  "scroll_interval": 1.4,
+  "max_scroll_rounds": 80
+}

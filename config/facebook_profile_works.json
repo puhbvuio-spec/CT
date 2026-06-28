@@ -1,0 +1,10 @@
+{
+  "max_posts": 100,
+  "max_scrolls": 200,
+  "page_load_timeout": 60000,
+  "scroll_delay": 2000,
+  "no_new_scroll_limit": 5,
+  "scroll_px": 800,
+  "save_batch_size": 10,
+  "comment_top_limit": 100
+}
