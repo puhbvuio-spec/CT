@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 15
 # GitHub API 要求的 User-Agent 头
 USER_AGENT = "social-platform-scraper"
+DEFAULT_UPDATE_REPO_OWNER = "puhbvuio-spec"
+DEFAULT_UPDATE_REPO_NAME = "CT"
 # 可选：GitHub Personal Access Token，用于提高 API 额度（60→5000 次/小时）
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
@@ -74,7 +76,18 @@ def is_newer(local_version: str, remote_version: str) -> bool:
     return remote_version > local_version
 
 
-def check_for_updates(current_version: str, repo_owner: str, repo_name: str) -> tuple[bool, str | None, str | None]:
+def _github_headers(use_token: bool = True) -> dict[str, str]:
+    headers = {"User-Agent": USER_AGENT}
+    if use_token and _GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {_GITHUB_TOKEN}"
+    return headers
+
+
+def check_for_updates(
+    current_version: str,
+    repo_owner: str = DEFAULT_UPDATE_REPO_OWNER,
+    repo_name: str = DEFAULT_UPDATE_REPO_NAME,
+) -> tuple[bool, str | None, str | None]:
     """
     检查 GitHub 仓库是否有新版本 release。
 
@@ -100,18 +113,17 @@ def check_for_updates(current_version: str, repo_owner: str, repo_name: str) -> 
         ValueError: API 返回非预期数据结构时抛出
     """
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases/latest"
-    headers = {"User-Agent": USER_AGENT}
-
-    # 可选 Token 认证，提高 API 额度
-    if _GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {_GITHUB_TOKEN}"
 
     logger.info("正在检查更新：%s/%s", repo_owner, repo_name)
-    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    response = requests.get(url, headers=_github_headers(use_token=True), timeout=REQUEST_TIMEOUT)
 
-    # 404 表示该仓库尚未创建任何 release
-    if response.status_code == 404:
-        logger.info("该仓库没有 release，跳过更新检查。")
+    if response.status_code == 401 and _GITHUB_TOKEN:
+        logger.warning("GitHub token unauthorized while checking updates; retrying without token.")
+        response = requests.get(url, headers=_github_headers(use_token=False), timeout=REQUEST_TIMEOUT)
+
+    # 404 通常表示仓库没有 release 或不可访问；401/403 不应打断主界面。
+    if response.status_code in {401, 403, 404}:
+        logger.info("更新源不可访问或没有 release（HTTP %s），跳过更新检查。", response.status_code)
         return (False, None, None)
 
     response.raise_for_status()

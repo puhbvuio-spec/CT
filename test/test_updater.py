@@ -13,7 +13,13 @@ import pytest
 # 将被测模块加入 path
 sys.path.insert(0, ".")
 
-from src.core.updater import check_for_updates, is_newer, parse_semver
+from src.core.updater import (
+    DEFAULT_UPDATE_REPO_NAME,
+    DEFAULT_UPDATE_REPO_OWNER,
+    check_for_updates,
+    is_newer,
+    parse_semver,
+)
 
 
 # ── parse_semver 测试 ────────────────────────────────────────────
@@ -75,6 +81,43 @@ def test_check_no_release():
     """仓库没有 release 时返回无更新。"""
     mock_response = MagicMock()
     mock_response.status_code = 404
+
+    with patch("src.core.updater.requests.get", return_value=mock_response):
+        has_update, latest, url = check_for_updates("1.0.0", "test", "repo")
+        assert has_update is False
+        assert latest is None
+        assert url is None
+
+
+def test_check_unauthorized_retry_without_token(monkeypatch):
+    """Token 失效时先无 token 重试，避免公开仓库被误判失败。"""
+    import src.core.updater as updater
+
+    unauthorized = MagicMock()
+    unauthorized.status_code = 401
+    success = MagicMock()
+    success.status_code = 200
+    success.json.return_value = {
+        "tag_name": "v2.0.0",
+        "html_url": "https://github.com/test/repo/releases/tag/v2.0.0",
+    }
+
+    monkeypatch.setattr(updater, "_GITHUB_TOKEN", "bad-token")
+    with patch("src.core.updater.requests.get", side_effect=[unauthorized, success]) as mock_get:
+        has_update, latest, url = check_for_updates("1.0.0", "test", "repo")
+
+    assert has_update is True
+    assert latest == "2.0.0"
+    assert mock_get.call_count == 2
+    assert "Authorization" in mock_get.call_args_list[0].kwargs["headers"]
+    assert "Authorization" not in mock_get.call_args_list[1].kwargs["headers"]
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_check_inaccessible_repo_is_quiet(status_code):
+    """仓库不可访问时不在主界面弹红色失败，只视为没有可用更新。"""
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
 
     with patch("src.core.updater.requests.get", return_value=mock_response):
         has_update, latest, url = check_for_updates("1.0.0", "test", "repo")
@@ -195,7 +238,7 @@ def test_check_pre_release_tag():
 def test_check_real_repo():
     """对真实仓库发起请求，验证不会崩溃。"""
     has_update, latest, url = check_for_updates(
-        "1.0.0", "helloworld856", "social-platform-scraper"
+        "1.0.0", DEFAULT_UPDATE_REPO_OWNER, DEFAULT_UPDATE_REPO_NAME
     )
     # 无论结果如何，不应抛异常
     assert isinstance(has_update, bool)

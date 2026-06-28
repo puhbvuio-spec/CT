@@ -618,9 +618,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
 
         def _worker() -> None:
             try:
-                has_update, latest, url = check_for_updates(
-                    __version__, "helloworld856", "social-platform-scraper"
-                )
+                has_update, latest, url = check_for_updates(__version__)
                 if has_update and latest and url:
                     self._update_available.emit(latest, url)
                 else:
@@ -692,8 +690,9 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         import threading
 
         def _do_update() -> None:
+            from src.core.updater import DEFAULT_UPDATE_REPO_NAME, DEFAULT_UPDATE_REPO_OWNER
             from src.core.hot_updater import run_hot_update, restart_app
-            success, msg = run_hot_update(tag, "helloworld856", "social-platform-scraper")
+            success, msg = run_hot_update(tag, DEFAULT_UPDATE_REPO_OWNER, DEFAULT_UPDATE_REPO_NAME)
             if success:
                 restart_app()
                 self._restart_now.emit()
