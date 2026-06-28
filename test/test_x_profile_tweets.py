@@ -42,16 +42,19 @@ class TestXProfileTweetsLogic(unittest.TestCase):
             limit_time_str="是",
             start_date="2025-05-06",
             end_date="2026-05-06",
-            get_comments_str="否",
+            get_comments_str="是",
             max_comments=100,
             log_callback=log_msgs.append,
         )
 
         self.assertEqual(mock_collect.call_count, 1)
         mock_extract_count.assert_not_called()
+        self.assertEqual(mock_context.new_page.call_count, 1)
 
         args, kwargs = mock_collect.call_args
+        self.assertIsNone(args[1])
         self.assertFalse(args[4])
+        self.assertFalse(args[7])
         self.assertIsNone(kwargs.get("keyword"))
         self.assertEqual(kwargs.get("max_collect"), DEFAULT_PROFILE_TWEET_LIMIT)
         self.assertTrue(any("忽略时间窗口" in msg for msg in log_msgs))

@@ -293,12 +293,9 @@ class XProfileTweetsWindow(SimpleToolWindow):
                     placeholder="https://x.com/username",
                     required=True,
                 ),
-                FieldSpec("get_comments", "是否获取推文评论信息？", kind="combo", options=("是", "否"), default="否"),
-                FieldSpec("max_comments", "最多获取评论数", kind="int", default=500, minimum=10, maximum=10000),
             ],
-            height=700,
+            height=660,
         )
-        self.bind_field_visibility("get_comments", "是", ["max_comments"])
 
     def validate_values(self, values):
         if not _lines(values["profile_urls"]):
@@ -314,8 +311,8 @@ class XProfileTweetsWindow(SimpleToolWindow):
             "否",
             DEFAULT_START_DATE,
             DEFAULT_END_DATE,
-            values["get_comments"],
-            int(values["max_comments"]),
+            "否",
+            0,
             DEFAULT_X_CDP_URL,
             int(values.get("max_scrolls", 300)),
             log_callback,

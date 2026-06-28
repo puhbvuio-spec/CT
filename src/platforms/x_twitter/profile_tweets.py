@@ -16,7 +16,6 @@ except ModuleNotFoundError:
 from src.core import (
     DEFAULT_X_CDP_URL,
     XlsxRowWriter,
-    MultiSheetXlsxWriter,
     build_output_path,
     connect_existing_chromium,
     expand_compact_number,
@@ -28,7 +27,6 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
-from src.platforms.x_twitter.comments import extract_comments
 
 
 def _parse_date_range(start_str: str, end_str: str):
@@ -465,24 +463,6 @@ def collect_profile_tweets(
                 row = row_from_tweet(row_offset, normalized_tweet)
                 pending_rows.append(row)
                 
-                if get_comments_bool:
-                    try:
-                        detail_page.goto(normalized_tweet["url"], wait_until="domcontentloaded", timeout=30000)
-                        detail_page.wait_for_selector('article[data-testid="tweet"]', timeout=30000)
-                        interruptible_sleep(2, stop_event)
-                        comments = extract_comments(detail_page, normalized_tweet["url"], max_comments, log_callback, stop_event, pause_event=pause_event)
-                        for comment in comments:
-                            comment_row = {
-                                "序号": str(row_offset),
-                                "推文链接": normalized_tweet["url"],
-                                "评论的点赞量": comment.get("likes", ""),
-                                "评论内容": comment.get("content", ""),
-                                "评论发布时间": comment.get("time", "")
-                            }
-                            writer.writerow("评论信息", comment_row)
-                    except Exception as exc:
-                        log_warn(log_callback, f"    提取评论失败：{exc}")
-                
                 if len(pending_rows) >= save_batch_size:
                     if hasattr(writer, "writerow") and hasattr(writer, "worksheets"):
                         for r in pending_rows:
@@ -665,19 +645,14 @@ def run_x_profile_tweets_spider(
 
         requested_time_limit = limit_time_str == "是"
         limit_time_bool = False
-        get_comments_bool = get_comments_str == "是"
+        get_comments_bool = False
         start_dt, end_dt = None, None
         if requested_time_limit:
             log_line(log_callback, "主页推文采集采用最新数量优先，已忽略时间窗口过滤。")
 
-        max_comments_val = max(10, int(max_comments))
+        max_comments_val = 0
         output_path = build_output_path("x", f"x_profile_tweets_{time.strftime('%Y%m%d_%H%M%S')}.xlsx", channel="profile_tweets")
-        
-        if get_comments_bool:
-            comment_fields = ["序号", "推文链接", "评论的点赞量", "评论内容", "评论发布时间"]
-            writer = MultiSheetXlsxWriter(output_path, {"推文信息": CSV_FIELDS, "评论信息": comment_fields})
-        else:
-            writer = XlsxRowWriter(output_path, CSV_FIELDS)
+        writer = XlsxRowWriter(output_path, CSV_FIELDS)
             
         row_offset = 0
 
@@ -691,7 +666,7 @@ def run_x_profile_tweets_spider(
                 return
 
             page = context.new_page()
-            detail_page = context.new_page() if get_comments_bool else None
+            detail_page = None
 
             parsed_kws = [k.strip() for k in keywords_text.splitlines() if k.strip()]
             keyword_list = parsed_kws if parsed_kws else []
@@ -726,9 +701,8 @@ def run_x_profile_tweets_spider(
                 except Exception as exc:
                     log_warn(log_callback, f"  跳过：{exc}")
 
-            for opened_page in (page, detail_page):
-                if opened_page is not None and not opened_page.is_closed():
-                    opened_page.close()
+            if page is not None and not page.is_closed():
+                page.close()
 
         completed_path = output_path
         writer.save()
