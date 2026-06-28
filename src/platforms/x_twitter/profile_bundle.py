@@ -219,12 +219,13 @@ def run_x_profile_bundle_spider(
                     break
 
                 profile_url = normalize_x_url(profile_url)
-                if checkpoint.is_completed(profile_url):
+                if checkpoint.is_successfully_completed(profile_url, positive_count_fields=("tweet_count",)):
                     log_line(log_callback, f"[{profile_index}/{total_profiles}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
                 log_line(log_callback, f"[{profile_index}/{total_profiles}] 采集博主信息与推文：{profile_url}")
 
                 profile_ready = False
+                profile_record_ok = False
                 try:
                     profile_ready = navigate_to_profile_via_search(
                         page,
@@ -239,20 +240,23 @@ def run_x_profile_bundle_spider(
                         log_warn(log_callback, f"  未能通过搜索页进入作者主页，使用链接兜底：{profile_url}")
                         profile_record = _fallback_profile_record(profile_url)
                     else:
-                        profile_record = extract_profile_record(
+                        extracted_profile = extract_profile_record(
                             page,
                             profile_url,
                             log_callback,
                             page_timeout=page_timeout,
                             stop_event=stop_event,
                             needs_navigation=False,
-                        ) or _fallback_profile_record(profile_url)
+                        )
+                        profile_record_ok = bool(extracted_profile)
+                        profile_record = extracted_profile or _fallback_profile_record(profile_url)
                 except Exception as exc:
                     log_warn(log_callback, f"  博主信息采集失败，使用链接兜底：{exc}")
                     profile_record = _fallback_profile_record(profile_url)
 
                 writer.writerow("博主信息", build_profile_row(profile_record))
 
+                tweets_collected_ok = False
                 try:
                     if not profile_ready:
                         raise RuntimeError("未能通过搜索页进入作者主页")
@@ -280,6 +284,7 @@ def run_x_profile_bundle_spider(
                         date_window_size=date_window_size,
                         include_reposts=include_reposts,
                     )
+                    tweets_collected_ok = True
                 except Exception as exc:
                     log_warn(log_callback, f"  推文采集失败：{exc}")
                     tweets = []
@@ -292,10 +297,13 @@ def run_x_profile_bundle_spider(
                     log_callback,
                     f"  完成：{profile_record.get('账号ID') or profile_url}，写入 {len(tweets)} 条推文。",
                 )
-                checkpoint.mark_completed(
-                    profile_url,
-                    {"output_path": output_path, "profile_index": profile_index, "tweet_count": len(tweets)},
-                )
+                if profile_ready and profile_record_ok and tweets_collected_ok:
+                    checkpoint.mark_completed(
+                        profile_url,
+                        {"output_path": output_path, "profile_index": profile_index, "tweet_count": len(tweets)},
+                    )
+                else:
+                    log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
 
         completed_path = output_path
         writer.save()

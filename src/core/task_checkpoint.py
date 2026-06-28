@@ -121,11 +121,29 @@ class TaskCheckpoint:
     def is_completed(self, key: str) -> bool:
         return str(key).strip().lower() in self.completed
 
+    def is_successfully_completed(self, key: str, positive_count_fields: tuple[str, ...] = ()) -> bool:
+        entry = self.completed.get(str(key).strip().lower())
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("status") == "completed":
+            return True
+        meta = entry.get("meta", {})
+        if positive_count_fields and isinstance(meta, dict):
+            for field in positive_count_fields:
+                try:
+                    if int(meta.get(field, 0) or 0) > 0:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+            return False
+        return bool(entry.get("completed_at"))
+
     def mark_completed(self, key: str, meta: dict[str, Any] | None = None) -> None:
         normalized = str(key).strip().lower()
         if not normalized:
             return
         self.completed[normalized] = {
+            "status": "completed",
             "completed_at": _now(),
             "meta": _jsonable(meta or {}),
         }
@@ -157,7 +175,7 @@ def open_task_checkpoint(tool_id: str, scope: dict[str, Any], log_callback=None)
     checkpoint = TaskCheckpoint(tool_id, scope)
     if checkpoint.completed_count():
         try:
-            log_callback(f"断点续跑：已识别到 {checkpoint.completed_count()} 个已完成项，将自动跳过。")
+            log_callback(f"断点续跑：已加载 {checkpoint.completed_count()} 条历史断点记录，将按成功状态自动判断是否跳过。")
         except Exception:
             pass
     return checkpoint

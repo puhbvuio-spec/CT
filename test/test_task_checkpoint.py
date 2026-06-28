@@ -35,6 +35,27 @@ class TestTaskCheckpoint(unittest.TestCase):
                 self.assertTrue(reloaded.is_completed("a"))
                 self.assertEqual(reloaded.completed_count(), 1)
 
+    def test_successful_completion_distinguishes_old_zero_count_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("src.core.task_checkpoint.get_workspace_root", return_value=Path(tmp)):
+                checkpoint = open_task_checkpoint("tool_counts", {"links": ["A", "B"]})
+                checkpoint.completed["a"] = {
+                    "completed_at": "2026-01-01 00:00:00",
+                    "meta": {"tweet_count": 0},
+                }
+                checkpoint.completed["b"] = {
+                    "completed_at": "2026-01-01 00:00:00",
+                    "meta": {"tweet_count": 2},
+                }
+                checkpoint.save()
+
+                reloaded = open_task_checkpoint("tool_counts", {"links": ["A", "B"]})
+                self.assertFalse(reloaded.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
+                self.assertTrue(reloaded.is_successfully_completed("B", positive_count_fields=("tweet_count",)))
+
+                reloaded.mark_completed("A", {"tweet_count": 0})
+                self.assertTrue(reloaded.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
+
     def test_xlsx_row_writer_can_append_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "rows.xlsx"

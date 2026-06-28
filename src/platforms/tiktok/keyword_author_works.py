@@ -374,10 +374,11 @@ def run_tiktok_keyword_author_works_spider(
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_completed(seed.profile_url):
+                if checkpoint.is_successfully_completed(seed.profile_url, positive_count_fields=("works_count",)):
                     log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入博主主页：{seed.profile_url}")
+                profile_record_ok = False
                 try:
                     profile_record = extract_profile_row(
                         profile_info_page,
@@ -386,6 +387,7 @@ def run_tiktok_keyword_author_works_spider(
                         captcha_wait=8,
                         stop_event=stop_event,
                     )
+                    profile_record_ok = True
                 except Exception as exc:
                     log_warn(log_callback, f"  博主信息补充失败：{exc}")
                     profile_record = {
@@ -396,6 +398,7 @@ def run_tiktok_keyword_author_works_spider(
                         "作者简介": seed.bio,
                     }
 
+                works_collected_ok = False
                 try:
                     works = collect_profile_video_details(
                         profile_page,
@@ -417,15 +420,19 @@ def run_tiktok_keyword_author_works_spider(
                         detail_delay_min=detail_delay_min,
                         detail_delay_max=detail_delay_max,
                     )
+                    works_collected_ok = True
                 except Exception as exc:
                     log_warn(log_callback, f"  博主作品采集失败：{exc}")
                     works = []
 
                 writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
-                checkpoint.mark_completed(
-                    seed.profile_url,
-                    {"output_path": output_path, "index": index, "works_count": len(works)},
-                )
+                if profile_record_ok and works_collected_ok:
+                    checkpoint.mark_completed(
+                        seed.profile_url,
+                        {"output_path": output_path, "index": index, "works_count": len(works)},
+                    )
+                else:
+                    log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 log_line(log_callback, f"  写入博主：{profile_record.get('博主ID') or seed.author_id or seed.profile_url}，作品 {len(works)} 条。")
 
             writer.save()

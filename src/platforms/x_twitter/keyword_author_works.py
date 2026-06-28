@@ -431,7 +431,7 @@ def run_x_keyword_author_works_spider(
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_completed(seed.profile_url):
+                if checkpoint.is_successfully_completed(seed.profile_url, positive_count_fields=("works_count",)):
                     log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 断点续跑跳过已完成作者：{seed.profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{min(len(authors), max_authors)}] 进入作者主页：{seed.profile_url}")
@@ -444,7 +444,7 @@ def run_x_keyword_author_works_spider(
                     pause_event=pause_event,
                     initial_delay=initial_load_delay,
                 )
-                profile_record = (
+                extracted_profile = (
                     extract_profile_record(
                         profile_page,
                         seed.profile_url,
@@ -455,13 +455,16 @@ def run_x_keyword_author_works_spider(
                     )
                     if profile_ready
                     else None
-                ) or {
+                )
+                profile_record_ok = bool(extracted_profile)
+                profile_record = extracted_profile or {
                     "作者主页链接": seed.profile_url,
                     "作者的名称": seed.author_name,
                     "账号ID": seed.account_id,
                     "粉丝数": "",
                     "简介": "",
                 }
+                works_collected_ok = False
                 try:
                     if not navigate_to_profile_via_search(
                         works_page,
@@ -496,14 +499,18 @@ def run_x_keyword_author_works_spider(
                         page_already_loaded=True,
                         include_reposts=False,
                     )
+                    works_collected_ok = True
                 except Exception as exc:
                     log_warn(log_callback, f"  作者作品采集失败：{exc}")
                     works = []
                 writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
-                checkpoint.mark_completed(
-                    seed.profile_url,
-                    {"output_path": output_path, "index": index, "works_count": len(works)},
-                )
+                if profile_ready and profile_record_ok and works_collected_ok:
+                    checkpoint.mark_completed(
+                        seed.profile_url,
+                        {"output_path": output_path, "index": index, "works_count": len(works)},
+                    )
+                else:
+                    log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 log_line(log_callback, f"  写入作者：{profile_record.get('账号ID') or seed.account_id or seed.profile_url}，作品 {len(works)} 条。")
 
             writer.save()

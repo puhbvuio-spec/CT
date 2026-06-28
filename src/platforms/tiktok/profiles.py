@@ -377,12 +377,14 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                if checkpoint.is_completed(profile_url):
+                if checkpoint.is_successfully_completed(profile_url, positive_count_fields=("profile_ok",)):
                     log_line(log_callback, f"[{index}/{len(profile_urls)}] 断点续跑跳过已完成博主：{profile_url}")
                     continue
                 log_line(log_callback, f"[{index}/{len(profile_urls)}] 提取博主信息：{profile_url}")
+                profile_ok = False
                 try:
                     row = extract_profile_row(page, profile_url, page_load_timeout=page_load_timeout, captcha_wait=captcha_wait)
+                    profile_ok = True
                     log_line(log_callback, f"  完成：{row['博主名称']} | {row['博主ID']} | 粉丝 {row['粉丝量'] or '未提取'}")
                 except Exception as exc:
                     row = {
@@ -395,7 +397,10 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     log_error(log_callback, f"  失败：{exc}")
 
                 writer.writerow(sanitize_csv_row(row))
-                checkpoint.mark_completed(profile_url, {"output_path": output_path, "index": index})
+                if profile_ok:
+                    checkpoint.mark_completed(profile_url, {"output_path": output_path, "index": index, "profile_ok": 1})
+                else:
+                    log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 # 每抓取 5 个博主主页进行随机冷却，以避免触发高频风控限制
                 if index % cooldown_every_val == 0:
                     if random_cooldown(log_callback, stop_event, cooldown_min_val, cooldown_max_val):
