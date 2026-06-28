@@ -111,14 +111,25 @@ def normalize_hashtag_input(value: str) -> HashtagSource:
     return HashtagSource(label=f"#{tag}", url=f"https://www.tiktok.com/tag/{encoded}")
 
 
-def parse_hashtag_sources(values: list[str] | tuple[str, ...] | str) -> list[HashtagSource]:
+def parse_hashtag_sources(
+    values: list[str] | tuple[str, ...] | str,
+    *,
+    skip_invalid: bool = False,
+    log_callback=None,
+) -> list[HashtagSource]:
     lines = values.splitlines() if isinstance(values, str) else list(values or [])
     sources: list[HashtagSource] = []
     seen: set[str] = set()
     for line in lines:
         if not str(line).strip():
             continue
-        source = normalize_hashtag_input(str(line))
+        try:
+            source = normalize_hashtag_input(str(line))
+        except ValueError as exc:
+            if skip_invalid:
+                log_warn(log_callback, f"跳过无效话题输入：{line}（{exc}）")
+                continue
+            raise
         key = source.url.lower()
         if key in seen:
             continue
@@ -140,10 +151,10 @@ def _author_row_for_hashtag(
     return {field: row.get(field, "") for field in CSV_FIELDS}
 
 
-def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5) -> None:
+def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5) -> bool:
     for attempt in range(1, max_attempts + 1):
         if should_stop(stop_event):
-            return
+            return False
         try:
             if attempt >= 3:
                 page.reload(wait_until="domcontentloaded", timeout=page_timeout)
@@ -162,7 +173,7 @@ def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback
 
         error_text = _detect_tiktok_search_error(page)
         if error_text is None:
-            return
+            return True
 
         log_line(log_callback, f"  话题页出现错误态「{error_text}」（第 {attempt}/{max_attempts} 次），尝试重试...")
         cooldown = random.uniform(5.0, 9.0) if attempt <= 2 else _retry_backoff_seconds(attempt)
@@ -171,10 +182,11 @@ def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback
             interruptible_sleep(random.uniform(4.0, 6.0), stop_event)
             if _detect_tiktok_search_error(page) is None:
                 log_line(log_callback, "  点击重试后话题页已恢复。")
-                return
+                return True
         interruptible_sleep(_retry_backoff_seconds(attempt), stop_event)
 
     log_line(log_callback, f"  话题页重试 {max_attempts} 次仍处于错误态，继续尝试采集：{source.url}")
+    return False
 
 
 def collect_hashtag_seed_authors(
@@ -205,9 +217,12 @@ def collect_hashtag_seed_authors(
             break
 
         log_line(log_callback, f"[{source_index}/{len(sources)}] 打开话题页：{source.label} {source.url}")
-        open_hashtag_page(topic_page, source, stop_event=stop_event, log_callback=log_callback, page_timeout=page_timeout)
+        if not open_hashtag_page(topic_page, source, stop_event=stop_event, log_callback=log_callback, page_timeout=page_timeout):
+            log_warn(log_callback, f"跳过话题：页面无法正常打开或持续错误：{source.label}")
+            continue
         scroll_limit = dynamic_search_scroll_limit(max_seed_works, max_topic_scrolls)
         no_new_rounds = 0
+        source_seen_count = 0
 
         for scroll_index in range(scroll_limit):
             if inspected_count >= max_seed_works or should_stop(stop_event):
@@ -216,6 +231,7 @@ def collect_hashtag_seed_authors(
                 break
 
             new_items = collect_visible_video_items(topic_page, seen_links)
+            source_seen_count += len(new_items)
             if not new_items:
                 no_new_rounds += 1
             else:
@@ -261,6 +277,8 @@ def collect_hashtag_seed_authors(
             trigger_search_lazy_load(topic_page)
             if interruptible_sleep(topic_scroll_pause, stop_event):
                 break
+        if source_seen_count == 0:
+            log_warn(log_callback, f"跳过话题：未发现可采集视频，可能是话题不存在、无公开内容或页面未加载成功：{source.label}")
 
     return authors
 
@@ -299,9 +317,9 @@ def run_tiktok_hashtag_author_works_spider(
     completed_path = None
     topic_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
     try:
-        sources = parse_hashtag_sources(hashtag_inputs)
+        sources = parse_hashtag_sources(hashtag_inputs, skip_invalid=True, log_callback=log_callback)
         if not sources:
-            raise ValueError("至少需要输入一个 TikTok 话题页链接或话题名。")
+            raise ValueError("至少需要输入一个有效的 TikTok 话题关键词。")
 
         limit_time_bool = limit_time_str == "是"
         start_dt = end_dt = None

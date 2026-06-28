@@ -144,10 +144,10 @@ class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
                 FieldSpec("end_date", "结束日期 YYYY-MM-DD", default=DEFAULT_END_DATE),
                 FieldSpec(
                     "hashtags",
-                    "话题页链接或话题名，每行一个",
+                    "话题关键词，每行一个",
                     kind="text_or_file",
                     required=True,
-                    placeholder="https://www.tiktok.com/tag/palworld\npalworld\n#monsterhunter",
+                    placeholder="palworld\nmonster taming games\n#monsterhunter",
                 ),
                 FieldSpec("quick_mode", "快速模式（作品最多取最新50条）？", kind="combo", options=("是", "否"), default="是"),
             ],
@@ -159,7 +159,8 @@ class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
         from src.platforms.tiktok.hashtag_author_works import parse_hashtag_sources
         from src.platforms.tiktok.keyword import parse_date_range
 
-        parse_hashtag_sources(_lines(values["hashtags"]))
+        if not parse_hashtag_sources(_lines(values["hashtags"]), skip_invalid=True):
+            raise ValueError("至少需要输入一个有效的话题关键词。")
         if values.get("limit_time") == "是":
             parse_date_range(values["start_date"], values["end_date"])
 

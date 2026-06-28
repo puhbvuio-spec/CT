@@ -23,11 +23,15 @@ def test_normalize_hashtag_inputs():
     assert source.label == "#palworld"
     assert source.url == "https://www.tiktok.com/tag/palworld"
 
+    source = normalize_hashtag_input("palworld")
+    assert source.label == "#palworld"
+    assert source.url == "https://www.tiktok.com/tag/palworld"
+
     source = normalize_hashtag_input("#monster taming")
     assert source.label == "#monster taming"
     assert source.url == "https://www.tiktok.com/tag/monster%20taming"
 
-    sources = parse_hashtag_sources(["palworld", "https://www.tiktok.com/tag/palworld"])
+    sources = parse_hashtag_sources(["palworld", "https://www.tiktok.com/tag/palworld", "https://www.tiktok.com/@notatag"], skip_invalid=True)
     assert len(sources) == 1
 
 
@@ -73,7 +77,7 @@ def test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id():
         "interruptible_sleep": hashtag_author_works.interruptible_sleep,
     }
     try:
-        hashtag_author_works.open_hashtag_page = lambda *args, **kwargs: None
+        hashtag_author_works.open_hashtag_page = lambda *args, **kwargs: True
         hashtag_author_works.dynamic_search_scroll_limit = lambda *args, **kwargs: 1
         hashtag_author_works.collect_visible_video_items = lambda page, seen: [
             {"视频链接": old_video_url, "播放量": "", "博主主页链接": "https://www.tiktok.com/@demo"}
@@ -102,6 +106,37 @@ def test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id():
     assert extract_calls == []
 
 
+def test_hashtag_page_failure_skips_source():
+    sources = parse_hashtag_sources(["palworld"])
+    originals = {
+        "open_hashtag_page": hashtag_author_works.open_hashtag_page,
+        "dynamic_search_scroll_limit": hashtag_author_works.dynamic_search_scroll_limit,
+        "collect_visible_video_items": hashtag_author_works.collect_visible_video_items,
+    }
+    try:
+        hashtag_author_works.open_hashtag_page = lambda *args, **kwargs: False
+        hashtag_author_works.dynamic_search_scroll_limit = lambda *args, **kwargs: 1
+        hashtag_author_works.collect_visible_video_items = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip failed page"))
+
+        authors = collect_hashtag_seed_authors(
+            object(),
+            object(),
+            sources,
+            None,
+            None,
+            False,
+            lambda message: None,
+            max_seed_works=10,
+            max_authors=10,
+            max_topic_scrolls=1,
+        )
+    finally:
+        for name, value in originals.items():
+            setattr(hashtag_author_works, name, value)
+
+    assert authors == {}
+
+
 def test_hashtag_author_works_tool_registered():
     window = TikTokHashtagAuthorWorksWindow.__new__(TikTokHashtagAuthorWorksWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
@@ -121,5 +156,6 @@ if __name__ == "__main__":
     test_normalize_hashtag_inputs()
     test_hashtag_author_row_uses_topic_column()
     test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id()
+    test_hashtag_page_failure_skips_source()
     test_hashtag_author_works_tool_registered()
     print("tiktok hashtag author works tests passed")
