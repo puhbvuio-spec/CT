@@ -47,9 +47,11 @@ from src.platforms.tiktok.keyword_author_works import (
     build_author_sheet_row,
     build_author_row,
     build_video_row,
+    load_seed_author_cache,
     merge_seed_author,
     quick_mode_enabled,
     resolve_profile_work_limit,
+    save_seed_author_cache,
 )
 from src.platforms.tiktok.profile_videos import (
     DEFAULT_MAX_SCROLLS,
@@ -248,11 +250,19 @@ def collect_hashtag_seed_authors(
     topic_scroll_pause: float = SEARCH_SCROLL_PAUSE,
     no_new_scroll_limit: int = 12,
     page_timeout: int = PAGE_LOAD_TIMEOUT,
+    initial_authors: dict[str, TikTokAuthorSeed] | None = None,
+    completed_sources: set[str] | None = None,
+    seed_cache_callback=None,
 ) -> dict[str, TikTokAuthorSeed]:
-    authors: dict[str, TikTokAuthorSeed] = {}
+    authors: dict[str, TikTokAuthorSeed] = dict(initial_authors or {})
+    completed_sources = set(completed_sources or set())
     inspected_count = 0
 
     for source_index, source in enumerate(sources, 1):
+        source_id = source.url
+        if source_id in completed_sources:
+            log_line(log_callback, f"[{source_index}/{len(sources)}] 断点续跑跳过已完成种子发现话题：{source.label}")
+            continue
         if should_stop(stop_event):
             break
         if wait_if_paused(pause_event, stop_event):
@@ -352,6 +362,10 @@ def collect_hashtag_seed_authors(
             log_warn(log_callback, f"跳过话题：未发现可采集视频，可能是话题不存在、无公开内容或页面未加载成功：{source.label}")
         for seed in source_authors.values():
             authors[_topic_author_key(source, seed)] = seed
+        if not should_stop(stop_event):
+            completed_sources.add(source_id)
+            if seed_cache_callback:
+                seed_cache_callback(authors, completed_sources)
         log_line(log_callback, f"  本话题发现 {len(source_authors)} 个去重作者，累计待采集 {len(authors)} 个话题作者项。")
 
     return authors
@@ -418,6 +432,8 @@ def run_tiktok_hashtag_author_works_spider(
             log_callback=log_callback,
             merge_on_keys=("hashtags",),
         )
+        source_ids = [source.url for source in sources]
+        cached_authors, cached_sources = load_seed_author_cache(checkpoint, source_ids, log_callback=log_callback)
         ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
         with sync_playwright() as playwright:
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)
@@ -440,6 +456,14 @@ def run_tiktok_hashtag_author_works_spider(
                 topic_scroll_pause=topic_scroll_pause,
                 no_new_scroll_limit=no_new_scroll_limit,
                 page_timeout=page_timeout,
+                initial_authors=cached_authors,
+                completed_sources=cached_sources,
+                seed_cache_callback=lambda current_authors, current_sources: save_seed_author_cache(
+                    checkpoint,
+                    source_ids,
+                    current_authors,
+                    current_sources,
+                ),
             )
             if not authors:
                 log_warn(log_callback, "没有从话题页中发现有效作者。")

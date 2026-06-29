@@ -227,6 +227,34 @@ def test_hashtag_seed_budget_applies_per_source():
     assert [seed.keywords for seed in authors.values()] == [["#first topic"], ["#second topic"]]
 
 
+def test_hashtag_seed_cache_roundtrips_and_skips_completed_source():
+    class MemoryCheckpoint:
+        state = {}
+
+        def get_state(self, key, default=None):
+            return self.state.get(key, default)
+
+        def set_state(self, key, value):
+            self.state[key] = value
+
+    source_ids = ["https://www.tiktok.com/tag/first", "https://www.tiktok.com/tag/second"]
+    seed = TikTokAuthorSeed(
+        profile_url="https://www.tiktok.com/@first",
+        author_name="First",
+        author_id="@first",
+        keywords=["#first"],
+        seed_links=["https://www.tiktok.com/@first/video/1"],
+    )
+    checkpoint = MemoryCheckpoint()
+    hashtag_author_works.save_seed_author_cache(checkpoint, source_ids, {"first": seed}, {source_ids[0]})
+
+    authors, completed_sources = hashtag_author_works.load_seed_author_cache(checkpoint, source_ids)
+
+    assert list(authors) == ["first"]
+    assert authors["first"].profile_url == "https://www.tiktok.com/@first"
+    assert completed_sources == {source_ids[0]}
+
+
 def test_hashtag_author_works_tool_registered():
     window = TikTokHashtagAuthorWorksWindow.__new__(TikTokHashtagAuthorWorksWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
@@ -250,5 +278,6 @@ if __name__ == "__main__":
     test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id()
     test_hashtag_page_failure_skips_source()
     test_hashtag_seed_budget_applies_per_source()
+    test_hashtag_seed_cache_roundtrips_and_skips_completed_source()
     test_hashtag_author_works_tool_registered()
     print("tiktok hashtag author works tests passed")

@@ -66,6 +66,16 @@ class TestTaskCheckpoint(unittest.TestCase):
                 self.assertTrue(reloaded.is_completed("a"))
                 self.assertEqual(reloaded.completed_count(), 1)
 
+    def test_checkpoint_persists_custom_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with _patched_checkpoint_roots(tmp):
+                checkpoint = open_task_checkpoint("tool_state", {"links": ["A"]})
+                checkpoint.set_state("seed_cache", {"count": 2, "items": ["a", "b"]})
+
+                reloaded = open_task_checkpoint("tool_state", {"links": ["A"]})
+                self.assertEqual(reloaded.get_state("seed_cache")["count"], 2)
+                self.assertEqual(reloaded.get_state("seed_cache")["items"], ["a", "b"])
+
     def test_successful_completion_distinguishes_old_zero_count_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             with _patched_checkpoint_roots(tmp):

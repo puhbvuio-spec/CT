@@ -97,6 +97,7 @@ CSV_FIELDS = [
     "作品发布时间列表",
 ]
 QUICK_PROFILE_WORK_LIMIT = 50
+SEED_CACHE_STATE_KEY = "seed_author_cache_v1"
 
 
 def quick_mode_enabled(value: str | None) -> bool:
@@ -117,6 +118,65 @@ class TikTokAuthorSeed:
     bio: str = ""
     keywords: list[str] = field(default_factory=list)
     seed_links: list[str] = field(default_factory=list)
+
+
+def _seed_to_dict(seed: TikTokAuthorSeed) -> dict[str, object]:
+    return {
+        "profile_url": seed.profile_url,
+        "author_name": seed.author_name,
+        "author_id": seed.author_id,
+        "followers": seed.followers,
+        "bio": seed.bio,
+        "keywords": list(seed.keywords),
+        "seed_links": list(seed.seed_links),
+    }
+
+
+def _seed_from_dict(data: dict) -> TikTokAuthorSeed | None:
+    if not isinstance(data, dict):
+        return None
+    profile_url = str(data.get("profile_url") or "").strip()
+    if not profile_url:
+        return None
+    return TikTokAuthorSeed(
+        profile_url=profile_url,
+        author_name=str(data.get("author_name") or ""),
+        author_id=str(data.get("author_id") or ""),
+        followers=str(data.get("followers") or ""),
+        bio=str(data.get("bio") or ""),
+        keywords=[str(item) for item in data.get("keywords", []) if str(item).strip()],
+        seed_links=[str(item) for item in data.get("seed_links", []) if str(item).strip()],
+    )
+
+
+def load_seed_author_cache(checkpoint, source_ids: list[str], log_callback=None) -> tuple[dict[str, TikTokAuthorSeed], set[str]]:
+    state = checkpoint.get_state(SEED_CACHE_STATE_KEY, {})
+    if not isinstance(state, dict) or state.get("source_ids") != list(source_ids):
+        return {}, set()
+
+    authors: dict[str, TikTokAuthorSeed] = {}
+    for item in state.get("authors", []):
+        if not isinstance(item, dict):
+            continue
+        seed = _seed_from_dict(item.get("seed", {}))
+        key = str(item.get("key") or "").strip().lower()
+        if key and seed:
+            authors[key] = seed
+    completed_sources = {str(item) for item in state.get("completed_sources", []) if str(item).strip()}
+    if authors or completed_sources:
+        log_line(log_callback, f"断点续跑：已恢复 {len(authors)} 个已发现作者种子，{len(completed_sources)}/{len(source_ids)} 个入口已完成种子发现。")
+    return authors, completed_sources
+
+
+def save_seed_author_cache(checkpoint, source_ids: list[str], authors: dict[str, TikTokAuthorSeed], completed_sources: set[str]) -> None:
+    checkpoint.set_state(
+        SEED_CACHE_STATE_KEY,
+        {
+            "source_ids": list(source_ids),
+            "completed_sources": sorted(str(item) for item in completed_sources),
+            "authors": [{"key": key, "seed": _seed_to_dict(seed)} for key, seed in authors.items()],
+        },
+    )
 
 
 def ensure_playwright_available() -> None:
@@ -293,12 +353,20 @@ def collect_seed_authors(
     max_search_scrolls: int = MAX_SEARCH_SCROLLS,
     search_scroll_pause: float = SEARCH_SCROLL_PAUSE,
     no_new_scroll_limit: int = 12,
+    initial_authors: dict[str, TikTokAuthorSeed] | None = None,
+    completed_sources: set[str] | None = None,
+    seed_cache_callback=None,
 ) -> dict[str, TikTokAuthorSeed]:
-    authors: dict[str, TikTokAuthorSeed] = {}
+    authors: dict[str, TikTokAuthorSeed] = dict(initial_authors or {})
+    completed_sources = set(completed_sources or set())
     seen_links: set[str] = set()
     inspected_count = 0
 
     for keyword_index, keyword in enumerate(keywords, 1):
+        source_id = str(keyword)
+        if source_id in completed_sources:
+            log_line(log_callback, f"[{keyword_index}/{len(keywords)}] 断点续跑跳过已完成种子发现关键词：{keyword}")
+            continue
         if inspected_count >= max_seed_works or should_stop(stop_event):
             break
         if wait_if_paused(pause_event, stop_event):
@@ -360,6 +428,10 @@ def collect_seed_authors(
             trigger_search_lazy_load(search_page)
             if interruptible_sleep(search_scroll_pause, stop_event):
                 break
+        if not should_stop(stop_event):
+            completed_sources.add(source_id)
+            if seed_cache_callback:
+                seed_cache_callback(authors, completed_sources)
 
     return authors
 
@@ -418,6 +490,8 @@ def run_tiktok_keyword_author_works_spider(
             },
             log_callback=log_callback,
         )
+        source_ids = [str(keyword) for keyword in keywords_list]
+        cached_authors, cached_sources = load_seed_author_cache(checkpoint, source_ids, log_callback=log_callback)
         ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
         with sync_playwright() as playwright:
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)
@@ -439,6 +513,14 @@ def run_tiktok_keyword_author_works_spider(
                 max_search_scrolls=max_search_scrolls,
                 search_scroll_pause=search_scroll_pause,
                 no_new_scroll_limit=no_new_scroll_limit,
+                initial_authors=cached_authors,
+                completed_sources=cached_sources,
+                seed_cache_callback=lambda current_authors, current_sources: save_seed_author_cache(
+                    checkpoint,
+                    source_ids,
+                    current_authors,
+                    current_sources,
+                ),
             )
             if not authors:
                 log_warn(log_callback, "没有从关键词结果中发现有效作者。")

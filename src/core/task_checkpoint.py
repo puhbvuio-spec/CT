@@ -379,6 +379,21 @@ class TaskCheckpoint:
             active.pop(normalized, None)
             self._write_locked(data)
 
+    def get_state(self, key: str, default: Any = None) -> Any:
+        if not key:
+            return default
+        self._refresh()
+        return self.data.get(str(key), default)
+
+    def set_state(self, key: str, value: Any) -> None:
+        if not key:
+            return
+        with _path_lock(self.path):
+            data = self._load()
+            self._prune_runtime_state(data)
+            data[str(key)] = _jsonable(value)
+            self._write_locked(data)
+
     def add_output_path(self, output_path: str | None) -> None:
         if not output_path:
             return
