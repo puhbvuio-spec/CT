@@ -423,9 +423,6 @@ def run_tiktok_hashtag_author_works_spider(
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)
             topic_page = context.new_page()
             seed_detail_page = context.new_page()
-            profile_info_page = context.new_page()
-            profile_page = context.new_page()
-            works_detail_page = context.new_page()
 
             authors = collect_hashtag_seed_authors(
                 topic_page,
@@ -447,6 +444,13 @@ def run_tiktok_hashtag_author_works_spider(
             if not authors:
                 log_warn(log_callback, "没有从话题页中发现有效作者。")
                 return
+
+            profile_page = topic_page
+            topic_page = None
+            profile_info_page = seed_detail_page
+            works_detail_page = seed_detail_page
+            seed_detail_page = None
+            log_line(log_callback, "已复用话题页和详情页进入作者阶段，避免额外打开空白标签页。")
 
             default_output_path = build_output_path(
                 "tiktok",

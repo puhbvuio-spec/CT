@@ -423,9 +423,6 @@ def run_tiktok_keyword_author_works_spider(
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)
             search_page = context.new_page()
             seed_detail_page = context.new_page()
-            profile_info_page = context.new_page()
-            profile_page = context.new_page()
-            works_detail_page = context.new_page()
 
             authors = collect_seed_authors(
                 search_page,
@@ -446,6 +443,13 @@ def run_tiktok_keyword_author_works_spider(
             if not authors:
                 log_warn(log_callback, "没有从关键词结果中发现有效作者。")
                 return
+
+            profile_page = search_page
+            search_page = None
+            profile_info_page = seed_detail_page
+            works_detail_page = seed_detail_page
+            seed_detail_page = None
+            log_line(log_callback, "已复用搜索页和详情页进入作者阶段，避免额外打开空白标签页。")
 
             default_output_path = build_output_path(
                 "tiktok",
