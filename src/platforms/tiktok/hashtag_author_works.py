@@ -185,6 +185,15 @@ def _video_row_for_hashtag(
     return build_video_row(index, seed, profile_record, work, source_field="话题")
 
 
+def _topic_author_key(source: HashtagSource, seed: TikTokAuthorSeed) -> str:
+    return f"{source.url.lower()}|{_author_key(seed.profile_url, seed.author_id)}"
+
+
+def _seed_checkpoint_key(seed: TikTokAuthorSeed) -> str:
+    topic = seed.keywords[0] if seed.keywords else ""
+    return f"{topic}|{seed.profile_url}"
+
+
 def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5) -> bool:
     for attempt in range(1, max_attempts + 1):
         if should_stop(stop_event):
@@ -241,11 +250,10 @@ def collect_hashtag_seed_authors(
     page_timeout: int = PAGE_LOAD_TIMEOUT,
 ) -> dict[str, TikTokAuthorSeed]:
     authors: dict[str, TikTokAuthorSeed] = {}
-    seen_links: set[str] = set()
     inspected_count = 0
 
     for source_index, source in enumerate(sources, 1):
-        if len(authors) >= max_authors or should_stop(stop_event):
+        if should_stop(stop_event):
             break
         if wait_if_paused(pause_event, stop_event):
             break
@@ -255,21 +263,22 @@ def collect_hashtag_seed_authors(
             log_warn(log_callback, f"跳过话题：页面无法正常打开或持续错误：{source.label}")
             continue
         source_seed_limit = max(1, int(max_seed_works or 1))
-        source_author_limit = max(0, int(max_authors or 0) - len(authors))
+        source_author_limit = max(1, int(max_authors or 1))
         scroll_limit = dynamic_search_scroll_limit(source_seed_limit, max_topic_scrolls)
+        source_authors: dict[str, TikTokAuthorSeed] = {}
+        source_seen_links: set[str] = set()
         source_inspected_count = 0
         source_new_author_count = 0
         log_line(
             log_callback,
-            f"  本话题采样配额：最多检查 {source_seed_limit} 个命中作品；全局最多进入 {max_authors} 个作者，当前已发现 {len(authors)} 个。",
+            f"  本话题采样配额：最多检查 {source_seed_limit} 个种子视频，最多进入 {source_author_limit} 个作者主页。",
         )
         no_new_rounds = 0
         source_seen_count = 0
 
         for scroll_index in range(scroll_limit):
             if (
-                len(authors) >= max_authors
-                or source_inspected_count >= source_seed_limit
+                source_inspected_count >= source_seed_limit
                 or source_new_author_count >= source_author_limit
                 or should_stop(stop_event)
             ):
@@ -277,7 +286,7 @@ def collect_hashtag_seed_authors(
             if wait_if_paused(pause_event, stop_event):
                 break
 
-            new_items = collect_visible_video_items(topic_page, seen_links)
+            new_items = collect_visible_video_items(topic_page, source_seen_links)
             source_seen_count += len(new_items)
             if not new_items:
                 no_new_rounds += 1
@@ -286,8 +295,7 @@ def collect_hashtag_seed_authors(
 
             for item in new_items:
                 if (
-                    len(authors) >= max_authors
-                    or source_inspected_count >= source_seed_limit
+                    source_inspected_count >= source_seed_limit
                     or source_new_author_count >= source_author_limit
                     or should_stop(stop_event)
                 ):
@@ -317,10 +325,10 @@ def collect_hashtag_seed_authors(
                         log_line(log_callback, f"  跳过种子：发布时间不在范围内（{row.get('发布时间') or '未解析'}）")
                         continue
                     author_key = _author_key(row.get("博主主页链接", ""), row.get("博主ID", ""))
-                    is_new_author = author_key not in authors
-                    if is_new_author and (len(authors) >= max_authors or source_new_author_count >= source_author_limit):
+                    is_new_author = author_key not in source_authors
+                    if is_new_author and source_new_author_count >= source_author_limit:
                         continue
-                    seed = merge_seed_author(authors, source.label, video_url, row)
+                    seed = merge_seed_author(source_authors, source.label, video_url, row)
                     if seed:
                         if is_new_author:
                             source_new_author_count += 1
@@ -333,8 +341,7 @@ def collect_hashtag_seed_authors(
             if no_new_rounds >= no_new_scroll_limit and scroll_index >= 5:
                 break
             if (
-                len(authors) >= max_authors
-                or source_inspected_count >= source_seed_limit
+                source_inspected_count >= source_seed_limit
                 or source_new_author_count >= source_author_limit
             ):
                 break
@@ -343,6 +350,9 @@ def collect_hashtag_seed_authors(
                 break
         if source_seen_count == 0:
             log_warn(log_callback, f"跳过话题：未发现可采集视频，可能是话题不存在、无公开内容或页面未加载成功：{source.label}")
+        for seed in source_authors.values():
+            authors[_topic_author_key(source, seed)] = seed
+        log_line(log_callback, f"  本话题发现 {len(source_authors)} 个去重作者，累计待采集 {len(authors)} 个话题作者项。")
 
     return authors
 
@@ -395,8 +405,10 @@ def run_tiktok_hashtag_author_works_spider(
         checkpoint = open_task_checkpoint(
             "tiktok_hashtag_author_works",
             {
-                "output_schema": "profile_video_sheets_v1",
+                "output_schema": "profile_video_sheets_per_topic_v2",
                 "hashtags": [source.url for source in sources],
+                "max_seed_works_per_topic": max_seed_works,
+                "max_authors_per_topic": max_authors,
                 "limit_time": limit_time_bool,
                 "start_date": start_date if limit_time_bool else "",
                 "end_date": end_date if limit_time_bool else "",
@@ -457,13 +469,14 @@ def run_tiktok_hashtag_author_works_spider(
             if hasattr(writer, "worksheets") and "博主对应视频" in writer.worksheets:
                 video_index = max(0, writer.worksheets["博主对应视频"].max_row - 1)
 
-            total_authors = min(len(authors), max_authors)
-            for index, seed in enumerate(list(authors.values())[:max_authors], 1):
+            total_authors = len(authors)
+            for index, seed in enumerate(authors.values(), 1):
                 if should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):
                     break
-                claimed, claim_status = checkpoint.claim_item(seed.profile_url, positive_count_fields=("works_count",))
+                checkpoint_key = _seed_checkpoint_key(seed)
+                claimed, claim_status = checkpoint.claim_item(checkpoint_key, positive_count_fields=("works_count",))
                 if not claimed:
                     if claim_status == "active":
                         log_line(log_callback, f"[{index}/{total_authors}] 双开分流跳过正在处理的作者：{seed.profile_url}")
@@ -524,11 +537,11 @@ def run_tiktok_hashtag_author_works_spider(
                     writer.writerow("博主对应视频", _video_row_for_hashtag(video_index, seed, profile_record, work))
                 if profile_record_ok and works_collected_ok and len(works) > 0:
                     checkpoint.mark_completed(
-                        seed.profile_url,
-                        {"output_path": output_path, "index": index, "works_count": len(works)},
+                        checkpoint_key,
+                        {"output_path": output_path, "index": index, "profile_url": seed.profile_url, "topic": seed.keywords[0] if seed.keywords else "", "works_count": len(works)},
                     )
                 else:
-                    checkpoint.release_item(seed.profile_url)
+                    checkpoint.release_item(checkpoint_key)
                     if works_collected_ok and len(works) == 0:
                         log_warn(log_callback, "  未采到主页作品，未写入断点完成标记，下次会继续重试。")
                     else:

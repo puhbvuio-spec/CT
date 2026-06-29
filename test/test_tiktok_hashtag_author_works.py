@@ -215,7 +215,7 @@ def test_hashtag_seed_budget_applies_per_source():
             False,
             lambda message: None,
             max_seed_works=1,
-            max_authors=2,
+            max_authors=1,
             max_topic_scrolls=1,
         )
     finally:
@@ -224,12 +224,14 @@ def test_hashtag_seed_budget_applies_per_source():
 
     assert [item[0] for item in extracted] == ["#first topic", "#second topic"]
     assert len(authors) == 2
+    assert [seed.keywords for seed in authors.values()] == [["#first topic"], ["#second topic"]]
 
 
 def test_hashtag_author_works_tool_registered():
     window = TikTokHashtagAuthorWorksWindow.__new__(TikTokHashtagAuthorWorksWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
     assert defaults["max_profile_works_per_author"] == 50
+    assert defaults["max_authors"] == 300
     assert defaults["max_topic_scrolls"] == 360
 
     static_ids = {tool.tool_id for tool in TOOLS}
