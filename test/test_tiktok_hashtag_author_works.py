@@ -137,6 +137,64 @@ def test_hashtag_page_failure_skips_source():
     assert authors == {}
 
 
+def test_hashtag_seed_budget_is_distributed_across_sources():
+    class Page:
+        current_label = ""
+
+    topic_page = Page()
+    sources = parse_hashtag_sources(["first topic", "second topic"])
+    extracted = []
+
+    originals = {
+        "open_hashtag_page": hashtag_author_works.open_hashtag_page,
+        "dynamic_search_scroll_limit": hashtag_author_works.dynamic_search_scroll_limit,
+        "collect_visible_video_items": hashtag_author_works.collect_visible_video_items,
+        "extract_video_row": hashtag_author_works.extract_video_row,
+        "trigger_search_lazy_load": hashtag_author_works.trigger_search_lazy_load,
+        "interruptible_sleep": hashtag_author_works.interruptible_sleep,
+    }
+
+    def fake_open(page, source, *args, **kwargs):
+        page.current_label = source.label
+        return True
+
+    def fake_items(page, seen):
+        handle = page.current_label.replace("#", "").replace(" ", "")
+        return [{"视频链接": f"https://www.tiktok.com/@{handle}/video/7600000000000000000", "播放量": "", "博主主页链接": f"https://www.tiktok.com/@{handle}"}]
+
+    def fake_row(page, keyword, video_url, *args, **kwargs):
+        extracted.append((keyword, video_url))
+        handle = video_url.split("/@")[1].split("/")[0]
+        return {"博主主页链接": f"https://www.tiktok.com/@{handle}", "博主名称": handle, "博主ID": f"@{handle}"}
+
+    try:
+        hashtag_author_works.open_hashtag_page = fake_open
+        hashtag_author_works.dynamic_search_scroll_limit = lambda *args, **kwargs: 1
+        hashtag_author_works.collect_visible_video_items = fake_items
+        hashtag_author_works.extract_video_row = fake_row
+        hashtag_author_works.trigger_search_lazy_load = lambda *args, **kwargs: None
+        hashtag_author_works.interruptible_sleep = lambda *args, **kwargs: False
+
+        authors = collect_hashtag_seed_authors(
+            topic_page,
+            object(),
+            sources,
+            None,
+            None,
+            False,
+            lambda message: None,
+            max_seed_works=2,
+            max_authors=2,
+            max_topic_scrolls=1,
+        )
+    finally:
+        for name, value in originals.items():
+            setattr(hashtag_author_works, name, value)
+
+    assert [item[0] for item in extracted] == ["#first topic", "#second topic"]
+    assert len(authors) == 2
+
+
 def test_hashtag_author_works_tool_registered():
     window = TikTokHashtagAuthorWorksWindow.__new__(TikTokHashtagAuthorWorksWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
@@ -157,5 +215,6 @@ if __name__ == "__main__":
     test_hashtag_author_row_uses_topic_column()
     test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id()
     test_hashtag_page_failure_skips_source()
+    test_hashtag_seed_budget_is_distributed_across_sources()
     test_hashtag_author_works_tool_registered()
     print("tiktok hashtag author works tests passed")
