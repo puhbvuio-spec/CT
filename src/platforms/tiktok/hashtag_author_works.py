@@ -23,7 +23,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
-from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.platforms.tiktok.keyword import (
     MAX_SEARCH_SCROLLS,
     SEARCH_SCROLL_PAUSE,
@@ -40,9 +40,13 @@ from src.platforms.tiktok.keyword import (
 )
 from src.platforms.tiktok.keyword_author_works import (
     QUICK_PROFILE_WORK_LIMIT,
+    AUTHOR_FIELDS,
+    VIDEO_FIELDS,
     TikTokAuthorSeed,
     _author_key,
+    build_author_sheet_row,
     build_author_row,
+    build_video_row,
     merge_seed_author,
     quick_mode_enabled,
     resolve_profile_work_limit,
@@ -76,6 +80,8 @@ CSV_FIELDS = [
     "作品链接列表",
     "作品发布时间列表",
 ]
+HASHTAG_AUTHOR_FIELDS = ["话题", *[field for field in AUTHOR_FIELDS if field != "搜索词"]]
+HASHTAG_VIDEO_FIELDS = ["话题", *[field for field in VIDEO_FIELDS if field != "搜索词"]]
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,34 @@ def _author_row_for_hashtag(
     row = build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt)
     row["话题"] = row.pop("搜索词", "")
     return {field: row.get(field, "") for field in CSV_FIELDS}
+
+
+def _author_sheet_row_for_hashtag(
+    seed: TikTokAuthorSeed,
+    profile_record: dict[str, str],
+    works: list[dict[str, str]],
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> dict[str, str]:
+    return build_author_sheet_row(
+        seed,
+        profile_record,
+        works,
+        limit_time_bool,
+        start_dt,
+        end_dt,
+        source_field="话题",
+    )
+
+
+def _video_row_for_hashtag(
+    index: int,
+    seed: TikTokAuthorSeed,
+    profile_record: dict[str, str],
+    work: dict[str, str],
+) -> dict[str, str]:
+    return build_video_row(index, seed, profile_record, work, source_field="话题")
 
 
 def _distributed_limit(total: int, bucket_count: int, bucket_index: int) -> int:
@@ -372,6 +406,7 @@ def run_tiktok_hashtag_author_works_spider(
         checkpoint = open_task_checkpoint(
             "tiktok_hashtag_author_works",
             {
+                "output_schema": "profile_video_sheets_v1",
                 "hashtags": [source.url for source in sources],
                 "limit_time": limit_time_bool,
                 "start_date": start_date if limit_time_bool else "",
@@ -417,14 +452,21 @@ def run_tiktok_hashtag_author_works_spider(
                 f"tiktok_hashtag_author_works_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
                 channel="hashtag_author_works",
             )
-            output_path, writer = open_checkpointed_row_writer(
+            output_path, writer = open_checkpointed_multi_sheet_writer(
                 checkpoint,
                 default_output_path,
-                CSV_FIELDS,
+                {
+                    "博主信息": HASHTAG_AUTHOR_FIELDS,
+                    "博主对应视频": HASHTAG_VIDEO_FIELDS,
+                },
                 log_callback=log_callback,
-                autosave_every=5,
+                autosave_every=10,
             )
             checkpoint.add_output_path(output_path)
+
+            video_index = 0
+            if hasattr(writer, "worksheets") and "博主对应视频" in writer.worksheets:
+                video_index = max(0, writer.worksheets["博主对应视频"].max_row - 1)
 
             total_authors = min(len(authors), max_authors)
             for index, seed in enumerate(list(authors.values())[:max_authors], 1):
@@ -487,7 +529,10 @@ def run_tiktok_hashtag_author_works_spider(
                     log_warn(log_callback, f"  博主作品采集失败：{exc}")
                     works = []
 
-                writer.writerow(_author_row_for_hashtag(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                writer.writerow("博主信息", _author_sheet_row_for_hashtag(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                for work in works:
+                    video_index += 1
+                    writer.writerow("博主对应视频", _video_row_for_hashtag(video_index, seed, profile_record, work))
                 if profile_record_ok and works_collected_ok and len(works) > 0:
                     checkpoint.mark_completed(
                         seed.profile_url,

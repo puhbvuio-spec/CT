@@ -7,7 +7,11 @@ sys.path.append(str(project_root))
 
 import src.platforms.tiktok.hashtag_author_works as hashtag_author_works
 from src.platforms.tiktok.hashtag_author_works import (
+    HASHTAG_AUTHOR_FIELDS,
+    HASHTAG_VIDEO_FIELDS,
     _author_row_for_hashtag,
+    _author_sheet_row_for_hashtag,
+    _video_row_for_hashtag,
     collect_hashtag_seed_authors,
     normalize_hashtag_input,
     parse_hashtag_sources,
@@ -60,6 +64,33 @@ def test_hashtag_author_row_uses_topic_column():
     assert row["采集作品数"] == "2"
     assert row["时间窗口内作品数"] == "1"
     assert row["作品标题列表"] == "first video\nold video"
+
+
+def test_hashtag_author_works_sheet_rows_use_topic_column():
+    seed = TikTokAuthorSeed(
+        profile_url="https://www.tiktok.com/@demo",
+        author_name="Demo",
+        author_id="@demo",
+        keywords=["#palworld"],
+        seed_links=["https://www.tiktok.com/@demo/video/1"],
+    )
+    profile = {"博主主页链接": "https://www.tiktok.com/@demo", "博主名称": "Demo", "博主ID": "@demo", "粉丝量": "100", "作者简介": "bio"}
+    work = {
+        "desc": "first\nvideo",
+        "video_url": "https://www.tiktok.com/@demo/video/7000000000000000001",
+        "published_at": "2026-06-01 00:00:00",
+    }
+
+    author_row = _author_sheet_row_for_hashtag(seed, profile, [work], True, datetime(2026, 6, 1), datetime(2026, 6, 30))
+    video_row = _video_row_for_hashtag(1, seed, profile, work)
+
+    assert list(author_row.keys()) == HASHTAG_AUTHOR_FIELDS
+    assert list(video_row.keys()) == HASHTAG_VIDEO_FIELDS
+    assert "搜索词" not in author_row
+    assert "搜索词" not in video_row
+    assert author_row["话题"] == "#palworld"
+    assert video_row["话题"] == "#palworld"
+    assert video_row["标题"] == "first video"
 
 
 def test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id():
@@ -213,6 +244,7 @@ def test_hashtag_author_works_tool_registered():
 if __name__ == "__main__":
     test_normalize_hashtag_inputs()
     test_hashtag_author_row_uses_topic_column()
+    test_hashtag_author_works_sheet_rows_use_topic_column()
     test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id()
     test_hashtag_page_failure_skips_source()
     test_hashtag_seed_budget_is_distributed_across_sources()

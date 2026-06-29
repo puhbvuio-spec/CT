@@ -13,7 +13,11 @@ from src.platforms.x_twitter.keyword_author_works import (
     resolve_profile_work_limit as resolve_x_profile_work_limit,
 )
 from src.platforms.tiktok.keyword_author_works import (
+    AUTHOR_FIELDS as TIKTOK_AUTHOR_FIELDS,
+    VIDEO_FIELDS as TIKTOK_VIDEO_FIELDS,
+    build_author_sheet_row as build_tiktok_author_sheet_row,
     build_author_row as build_tiktok_author_row,
+    build_video_row as build_tiktok_video_row,
     merge_seed_author as merge_tiktok_seed_author,
     resolve_profile_work_limit as resolve_tiktok_profile_work_limit,
 )
@@ -103,6 +107,42 @@ def test_tiktok_author_seed_dedup_and_row_aggregation():
     assert row["时间窗口内作品数"] == "2"
     assert row["作品标题列表"] == "first video\nsecond video\nolder video\nunknown date"
     assert row["作品链接列表"] == "https://www.tiktok.com/@demo/video/3\nhttps://www.tiktok.com/@demo/video/4\nhttps://www.tiktok.com/@demo/video/5\nhttps://www.tiktok.com/@demo/video/6"
+
+
+def test_tiktok_author_works_sheet_rows_are_split():
+    seed = tiktok_author_works.TikTokAuthorSeed(
+        profile_url="https://www.tiktok.com/@demo",
+        author_name="Demo",
+        author_id="@demo",
+        followers="123",
+        bio="bio",
+        keywords=["monster games"],
+        seed_links=["https://www.tiktok.com/@demo/video/1"],
+    )
+    profile = {"博主主页链接": "https://www.tiktok.com/@demo", "博主名称": "Demo", "博主ID": "@demo", "粉丝量": "123", "作者简介": "bio"}
+    works = [
+        {
+            "desc": "first\nvideo",
+            "video_url": "https://www.tiktok.com/@demo/video/7000000000000000001",
+            "published_at": "2026-06-01 00:00:00",
+            "likes": "10",
+            "comments": "2",
+            "collects": "3",
+            "shares": "4",
+        }
+    ]
+
+    author_row = build_tiktok_author_sheet_row(seed, profile, works, True, datetime(2026, 6, 1), datetime(2026, 6, 30))
+    video_row = build_tiktok_video_row(1, seed, profile, works[0])
+
+    assert list(author_row.keys()) == TIKTOK_AUTHOR_FIELDS
+    assert "作品标题列表" not in author_row
+    assert author_row["搜索词"] == "monster games"
+    assert author_row["采集作品数"] == "1"
+    assert list(video_row.keys()) == TIKTOK_VIDEO_FIELDS
+    assert video_row["作者主页链接"] == "https://www.tiktok.com/@demo"
+    assert video_row["标题"] == "first video"
+    assert video_row["编号"] == "7000000000000000001"
 
 
 def test_keyword_author_works_default_profile_limit_is_50():
@@ -225,6 +265,7 @@ def test_keyword_author_works_tools_registered():
 if __name__ == "__main__":
     test_x_author_seed_dedup_and_row_aggregation()
     test_tiktok_author_seed_dedup_and_row_aggregation()
+    test_tiktok_author_works_sheet_rows_are_split()
     test_keyword_author_works_default_profile_limit_is_50()
     test_quick_mode_forces_latest_50_profile_works()
     test_tiktok_seed_prefilter_skips_obvious_out_of_window_video_id()

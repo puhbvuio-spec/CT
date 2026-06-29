@@ -21,7 +21,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
-from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.platforms.tiktok.keyword import (
     MAX_SEARCH_SCROLLS,
     SEARCH_SCROLL_PAUSE,
@@ -44,6 +44,7 @@ from src.platforms.tiktok.profile_videos import (
     SCROLL_INTERVAL_SECONDS,
     SCROLL_PX,
     collect_profile_video_details,
+    parse_video_id,
 )
 from src.platforms.tiktok.profiles import (
     extract_profile_row,
@@ -52,7 +53,7 @@ from src.platforms.tiktok.profiles import (
 )
 
 
-CSV_FIELDS = [
+AUTHOR_FIELDS = [
     "搜索词",
     "命中作品数",
     "命中作品链接列表",
@@ -63,6 +64,34 @@ CSV_FIELDS = [
     "作者简介",
     "采集作品数",
     "时间窗口内作品数",
+]
+VIDEO_FIELDS = [
+    "搜索词",
+    "序号",
+    "编号",
+    "视频链接",
+    "作品链接",
+    "博主主页链接",
+    "作者主页链接",
+    "标题",
+    "作品内容",
+    "频道名称",
+    "发布日期",
+    "作品类型",
+    "直播状态",
+    "关联作品标题",
+    "关联作品链接",
+    "作品时长",
+    "作品简介",
+    "浏览量",
+    "播放量",
+    "点赞数",
+    "评论数",
+    "收藏量",
+    "分享数",
+]
+CSV_FIELDS = [
+    *AUTHOR_FIELDS,
     "作品标题列表",
     "作品链接列表",
     "作品发布时间列表",
@@ -138,8 +167,11 @@ def merge_seed_author(authors: dict[str, TikTokAuthorSeed], keyword: str, video_
     return seed
 
 
-def _cell_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+def _cell_text(value: str, limit: int | None = None) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if limit is not None and len(text) > limit:
+        return text[:limit].rstrip()
+    return text
 
 
 def _join_cell(values) -> str:
@@ -185,6 +217,65 @@ def build_author_row(
         "作品链接列表": _join_cell(links),
         "作品发布时间列表": _join_cell(publish_times),
     }
+
+
+def build_author_sheet_row(
+    seed: TikTokAuthorSeed,
+    profile_record: dict[str, str],
+    works: list[dict[str, str]],
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+    *,
+    source_field: str = "搜索词",
+) -> dict[str, str]:
+    row = build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt)
+    if source_field != "搜索词":
+        row[source_field] = row.pop("搜索词", "")
+    fields = [source_field, *[field for field in AUTHOR_FIELDS if field != "搜索词"]]
+    return {field: row.get(field, "") for field in fields}
+
+
+def build_video_row(
+    index: int,
+    seed: TikTokAuthorSeed,
+    profile_record: dict[str, str],
+    work: dict[str, str],
+    *,
+    source_field: str = "搜索词",
+) -> dict[str, str]:
+    profile_url = profile_record.get("博主主页链接") or seed.profile_url
+    author_name = profile_record.get("博主名称") or seed.author_name
+    author_id = profile_record.get("博主ID") or seed.author_id
+    video_url = work.get("video_url", "")
+    title = _cell_text(work.get("desc", ""), limit=120)
+    desc = _cell_text(work.get("desc", ""))
+    row = {
+        source_field: _join_cell(seed.keywords),
+        "序号": str(index),
+        "编号": parse_video_id(video_url),
+        "视频链接": video_url,
+        "作品链接": video_url,
+        "博主主页链接": profile_url,
+        "作者主页链接": profile_url,
+        "标题": title,
+        "作品内容": f"{desc}[视频]" if desc else "",
+        "频道名称": author_name,
+        "发布日期": work.get("published_at", ""),
+        "作品类型": "视频",
+        "直播状态": "非直播",
+        "关联作品标题": "",
+        "关联作品链接": "",
+        "作品时长": "",
+        "作品简介": desc,
+        "浏览量": work.get("浏览量", ""),
+        "播放量": work.get("播放量", "") or work.get("play_count", ""),
+        "点赞数": work.get("likes", ""),
+        "评论数": work.get("comments", ""),
+        "收藏量": work.get("collects", ""),
+        "分享数": work.get("shares", ""),
+    }
+    return row
 
 
 def collect_seed_authors(
@@ -317,6 +408,7 @@ def run_tiktok_keyword_author_works_spider(
         checkpoint = open_task_checkpoint(
             "tiktok_keyword_author_works",
             {
+                "output_schema": "profile_video_sheets_v1",
                 "keywords": list(keywords_list),
                 "limit_time": limit_time_bool,
                 "start_date": start_date if limit_time_bool else "",
@@ -360,14 +452,21 @@ def run_tiktok_keyword_author_works_spider(
                 f"tiktok_keyword_author_works_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
                 channel="keyword_author_works",
             )
-            output_path, writer = open_checkpointed_row_writer(
+            output_path, writer = open_checkpointed_multi_sheet_writer(
                 checkpoint,
                 default_output_path,
-                CSV_FIELDS,
+                {
+                    "博主信息": AUTHOR_FIELDS,
+                    "博主对应视频": VIDEO_FIELDS,
+                },
                 log_callback=log_callback,
-                autosave_every=5,
+                autosave_every=10,
             )
             checkpoint.add_output_path(output_path)
+
+            video_index = 0
+            if hasattr(writer, "worksheets") and "博主对应视频" in writer.worksheets:
+                video_index = max(0, writer.worksheets["博主对应视频"].max_row - 1)
 
             for index, seed in enumerate(list(authors.values())[:max_authors], 1):
                 if should_stop(stop_event):
@@ -429,7 +528,10 @@ def run_tiktok_keyword_author_works_spider(
                     log_warn(log_callback, f"  博主作品采集失败：{exc}")
                     works = []
 
-                writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                writer.writerow("博主信息", build_author_sheet_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                for work in works:
+                    video_index += 1
+                    writer.writerow("博主对应视频", build_video_row(video_index, seed, profile_record, work))
                 if profile_record_ok and works_collected_ok and len(works) > 0:
                     checkpoint.mark_completed(
                         seed.profile_url,
