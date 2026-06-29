@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 # 全部分类常量，用于指示侧边栏拉取全部列表
 ALL_CATEGORY = "全部"
 # 分类在侧边栏显示时的固定排序权重
-CATEGORY_ORDER = [ALL_CATEGORY, "YouTube", "TikTok", "X/Twitter", "Instagram", "Facebook", "数据处理"]
+CATEGORY_ORDER = [ALL_CATEGORY, "YouTube", "TikTok", "X/Twitter", "Steam", "Instagram", "Facebook", "数据处理"]
 
 
 class ThreePlatformCrawlerQtApp(QMainWindow):

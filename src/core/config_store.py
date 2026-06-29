@@ -166,6 +166,20 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "video_batch_cooldown_min": 4.0,
         "video_batch_cooldown_max": 9.0,
     },
+    "steam_api_research": {
+        "parallel_workers": 1,
+        "max_apps_per_keyword": 100,
+        "keyword_search_mode": "商店搜索接口（推荐）",
+        "include_non_games": "否",
+        "collect_current_players": "是",
+        "collect_achievements": "否",
+        "review_language": "all",
+        "reviews_filter": "all",
+        "request_timeout": 30,
+        "request_delay": 0.2,
+        "cache_ttl_hours": 168,
+        "save_batch_size": 10,
+    },
     "x_keyword_video_search": {
         "slice_days": 7,                       # 时间跨度切分天数，用于按区间精准爬取
         "search_page_timeout": 40000,          # 别名保留

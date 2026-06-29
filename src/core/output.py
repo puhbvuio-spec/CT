@@ -15,6 +15,7 @@ PLATFORM_DIRS = {
     "x_platform": "x",
     "twitter": "x",
     "data": "data",
+    "steam": "steam",
 }
 
 # 用于从文件名中识别动作日期（YYYYMMDD）的匹配模式。
@@ -127,4 +128,3 @@ def build_output_path(platform: str, filename: str, channel: str | None = None, 
         run_date = derive_run_date_from_filename(filename)
     target_dir = get_platform_output_dir(platform, channel=channel, run_date=run_date)
     return str(target_dir / filename)
-
