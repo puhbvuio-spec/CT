@@ -430,14 +430,17 @@ def run_tiktok_keyword_author_works_spider(
                     works = []
 
                 writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
-                if profile_record_ok and works_collected_ok:
+                if profile_record_ok and works_collected_ok and len(works) > 0:
                     checkpoint.mark_completed(
                         seed.profile_url,
                         {"output_path": output_path, "index": index, "works_count": len(works)},
                     )
                 else:
                     checkpoint.release_item(seed.profile_url)
-                    log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
+                    if works_collected_ok and len(works) == 0:
+                        log_warn(log_callback, "  未采到主页作品，未写入断点完成标记，下次会继续重试。")
+                    else:
+                        log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 log_line(log_callback, f"  写入博主：{profile_record.get('博主ID') or seed.author_id or seed.profile_url}，作品 {len(works)} 条。")
 
             writer.save()

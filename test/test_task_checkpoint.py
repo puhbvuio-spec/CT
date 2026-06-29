@@ -85,7 +85,7 @@ class TestTaskCheckpoint(unittest.TestCase):
                 self.assertTrue(reloaded.is_successfully_completed("B", positive_count_fields=("tweet_count",)))
 
                 reloaded.mark_completed("A", {"tweet_count": 0})
-                self.assertTrue(reloaded.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
+                self.assertFalse(reloaded.is_successfully_completed("A", positive_count_fields=("tweet_count",)))
 
     def test_checkpoint_log_mentions_input_count_and_history_count(self):
         with tempfile.TemporaryDirectory() as tmp:

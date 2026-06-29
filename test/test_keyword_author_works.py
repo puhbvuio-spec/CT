@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 from datetime import datetime
+import json
 
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
@@ -16,6 +17,7 @@ from src.platforms.tiktok.keyword_author_works import (
     merge_seed_author as merge_tiktok_seed_author,
     resolve_profile_work_limit as resolve_tiktok_profile_work_limit,
 )
+from src.platforms.tiktok.profile_videos import collect_visible_video_links
 from src.platforms.x_twitter.windows import XKeywordAuthorWorksWindow
 from src.platforms.tiktok.windows import TikTokKeywordAuthorWorksWindow
 from src.studio.discovery import discover_tools
@@ -167,6 +169,47 @@ def test_tiktok_seed_prefilter_skips_obvious_out_of_window_video_id():
     assert extract_calls == []
 
 
+class FakeTikTokProfilePage:
+    url = "https://www.tiktok.com/@demo"
+
+    def evaluate(self, script):
+        if "querySelectorAll" in script:
+            return ["/@demo/video/7000000000000000001"]
+        return json.dumps(
+            {
+                "universal": {
+                    "ItemModule": {
+                        "7000000000000000002": {
+                            "id": "7000000000000000002",
+                            "desc": "state video",
+                            "createTime": 1760000000,
+                            "author": {"uniqueId": "demo"},
+                        },
+                        "7000000000000000003": {
+                            "id": "7000000000000000003",
+                            "desc": "other author",
+                            "createTime": 1760000000,
+                            "author": {"uniqueId": "other"},
+                        },
+                    }
+                }
+            }
+        )
+
+    def content(self):
+        return ""
+
+
+def test_tiktok_profile_video_links_use_dom_and_state_fallbacks():
+    seen = set()
+    links = collect_visible_video_links(FakeTikTokProfilePage(), seen)
+
+    assert links == [
+        "https://www.tiktok.com/@demo/video/7000000000000000001",
+        "https://www.tiktok.com/@demo/video/7000000000000000002",
+    ]
+
+
 def test_keyword_author_works_tools_registered():
     static_ids = {tool.tool_id for tool in TOOLS}
     assert "x_keyword_author_works" in static_ids
@@ -185,5 +228,6 @@ if __name__ == "__main__":
     test_keyword_author_works_default_profile_limit_is_50()
     test_quick_mode_forces_latest_50_profile_works()
     test_tiktok_seed_prefilter_skips_obvious_out_of_window_video_id()
+    test_tiktok_profile_video_links_use_dom_and_state_fallbacks()
     test_keyword_author_works_tools_registered()
     print("keyword author works tests passed")

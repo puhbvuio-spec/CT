@@ -292,8 +292,6 @@ class TaskCheckpoint:
     def _entry_is_successful(self, entry: Any, positive_count_fields: tuple[str, ...] = ()) -> bool:
         if not isinstance(entry, dict):
             return False
-        if entry.get("status") == "completed":
-            return True
         meta = entry.get("meta", {})
         if positive_count_fields and isinstance(meta, dict):
             for field in positive_count_fields:
@@ -303,6 +301,8 @@ class TaskCheckpoint:
                 except (TypeError, ValueError):
                     continue
             return False
+        if entry.get("status") == "completed":
+            return True
         return bool(entry.get("completed_at"))
 
     @property

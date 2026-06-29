@@ -317,6 +317,37 @@ def normalize_video_url(url: str) -> str:
     return value
 
 
+def profile_handle_from_url(profile_url: str) -> str:
+    match = re.search(r"tiktok\.com/@([^/?#]+)", profile_url or "", re.I)
+    return match.group(1).strip().lstrip("@") if match else ""
+
+
+def _state_item_author_handle(item: dict) -> str:
+    author = item.get("author") if isinstance(item, dict) else None
+    if isinstance(author, dict):
+        return format_plain_text(author.get("uniqueId") or author.get("unique_id") or author.get("username")).lstrip("@")
+    if isinstance(author, str):
+        return format_plain_text(author).lstrip("@")
+    return ""
+
+
+def _state_item_video_url(item: dict, default_handle: str) -> str:
+    if not isinstance(item, dict):
+        return ""
+    video_id = format_plain_text(item.get("id") or item.get("itemId") or item.get("aweme_id"))
+    if not video_id or not video_id.isdigit() or len(video_id) < 10:
+        return ""
+    if not (item.get("desc") or item.get("description") or item.get("createTime") or item.get("create_time") or item.get("video") or item.get("stats")):
+        return ""
+    author_handle = _state_item_author_handle(item)
+    if default_handle and author_handle and author_handle.lower() != default_handle.lower():
+        return ""
+    handle = author_handle or default_handle
+    if not handle:
+        return ""
+    return normalize_video_url(f"https://www.tiktok.com/@{handle}/video/{video_id}")
+
+
 def trigger_profile_lazy_load(page, scroll_px=None) -> None:
     """
     触发博主主页视频列表的下拉懒加载：
@@ -359,18 +390,34 @@ def collect_visible_video_links(page, seen: set[str]) -> list[str]:
     """
     links: list[str] = []
     try:
-        anchors = page.locator("a[href*='/video/']").all()
+        hrefs = page.evaluate(
+            """() => Array.from(document.querySelectorAll("a[href*='/video/'], a[href*='video/']"))
+                .map(node => node.href || node.getAttribute('href') || '')
+                .filter(Boolean)"""
+        )
     except Exception:
-        anchors = []
+        hrefs = []
 
-    for anchor in anchors:
+    for href in hrefs if isinstance(hrefs, list) else []:
         try:
-            href = normalize_video_url(anchor.get_attribute("href") or "")
+            normalized = normalize_video_url(str(href))
         except Exception:
-            href = ""
-        if href and href not in seen:
-            seen.add(href)
-            links.append(href)
+            normalized = ""
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            links.append(normalized)
+
+    default_handle = profile_handle_from_url(getattr(page, "url", ""))
+    try:
+        sources = page_state_sources(page)
+    except Exception:
+        sources = []
+    for source in sources:
+        for node in iter_dicts(source):
+            normalized = _state_item_video_url(node, default_handle)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                links.append(normalized)
     return links
 
 
@@ -674,6 +721,13 @@ def collect_profile_video_details(
     processed_count = 0
 
     profile_page.goto(normalized_profile_url, wait_until="domcontentloaded", timeout=page_load_timeout)
+    try:
+        profile_page.wait_for_selector(
+            "a[href*='/video/'], a[href*='video/'], script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#RENDER_DATA",
+            timeout=min(int(page_load_timeout), 15000),
+        )
+    except Exception:
+        pass
     interruptible_sleep(2.0, stop_event)
 
     for scroll_index in range(max(1, int(max_scrolls or DEFAULT_MAX_SCROLLS))):
