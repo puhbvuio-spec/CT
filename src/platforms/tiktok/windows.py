@@ -166,7 +166,7 @@ class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
-            ConfigParam("max_seed_works", "话题入口最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
+            ConfigParam("max_seed_works", "每个话题最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
             ConfigParam("max_authors", "最多进入作者主页数", kind="int", default=100, minimum=1, maximum=1000),
             ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
             ConfigParam("max_topic_scrolls", "话题页最大滚动次数", kind="int", default=360, minimum=5, maximum=2000),

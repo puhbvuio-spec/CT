@@ -168,7 +168,7 @@ def test_hashtag_page_failure_skips_source():
     assert authors == {}
 
 
-def test_hashtag_seed_budget_is_distributed_across_sources():
+def test_hashtag_seed_budget_applies_per_source():
     class Page:
         current_label = ""
 
@@ -214,7 +214,7 @@ def test_hashtag_seed_budget_is_distributed_across_sources():
             None,
             False,
             lambda message: None,
-            max_seed_works=2,
+            max_seed_works=1,
             max_authors=2,
             max_topic_scrolls=1,
         )
@@ -247,6 +247,6 @@ if __name__ == "__main__":
     test_hashtag_author_works_sheet_rows_use_topic_column()
     test_hashtag_seed_prefilter_skips_obvious_out_of_window_video_id()
     test_hashtag_page_failure_skips_source()
-    test_hashtag_seed_budget_is_distributed_across_sources()
+    test_hashtag_seed_budget_applies_per_source()
     test_hashtag_author_works_tool_registered()
     print("tiktok hashtag author works tests passed")

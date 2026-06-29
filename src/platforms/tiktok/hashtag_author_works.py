@@ -185,15 +185,6 @@ def _video_row_for_hashtag(
     return build_video_row(index, seed, profile_record, work, source_field="话题")
 
 
-def _distributed_limit(total: int, bucket_count: int, bucket_index: int) -> int:
-    total = max(1, int(total or 1))
-    bucket_count = max(1, int(bucket_count or 1))
-    bucket_index = max(1, int(bucket_index or 1))
-    base = total // bucket_count
-    remainder = total % bucket_count
-    return max(1, base + (1 if bucket_index <= remainder else 0))
-
-
 def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5) -> bool:
     for attempt in range(1, max_attempts + 1):
         if should_stop(stop_event):
@@ -254,7 +245,7 @@ def collect_hashtag_seed_authors(
     inspected_count = 0
 
     for source_index, source in enumerate(sources, 1):
-        if inspected_count >= max_seed_works or should_stop(stop_event):
+        if len(authors) >= max_authors or should_stop(stop_event):
             break
         if wait_if_paused(pause_event, stop_event):
             break
@@ -263,22 +254,21 @@ def collect_hashtag_seed_authors(
         if not open_hashtag_page(topic_page, source, stop_event=stop_event, log_callback=log_callback, page_timeout=page_timeout):
             log_warn(log_callback, f"跳过话题：页面无法正常打开或持续错误：{source.label}")
             continue
-        source_seed_limit = _distributed_limit(max_seed_works, len(sources), source_index)
-        source_author_limit = _distributed_limit(max_authors, len(sources), source_index)
+        source_seed_limit = max(1, int(max_seed_works or 1))
+        source_author_limit = max(0, int(max_authors or 0) - len(authors))
         scroll_limit = dynamic_search_scroll_limit(source_seed_limit, max_topic_scrolls)
         source_inspected_count = 0
         source_new_author_count = 0
         log_line(
             log_callback,
-            f"  本话题采样配额：最多检查 {source_seed_limit} 个命中作品，最多新增 {source_author_limit} 个作者。",
+            f"  本话题采样配额：最多检查 {source_seed_limit} 个命中作品；全局最多进入 {max_authors} 个作者，当前已发现 {len(authors)} 个。",
         )
         no_new_rounds = 0
         source_seen_count = 0
 
         for scroll_index in range(scroll_limit):
             if (
-                inspected_count >= max_seed_works
-                or len(authors) >= max_authors
+                len(authors) >= max_authors
                 or source_inspected_count >= source_seed_limit
                 or source_new_author_count >= source_author_limit
                 or should_stop(stop_event)
@@ -296,8 +286,7 @@ def collect_hashtag_seed_authors(
 
             for item in new_items:
                 if (
-                    inspected_count >= max_seed_works
-                    or len(authors) >= max_authors
+                    len(authors) >= max_authors
                     or source_inspected_count >= source_seed_limit
                     or source_new_author_count >= source_author_limit
                     or should_stop(stop_event)
@@ -335,7 +324,7 @@ def collect_hashtag_seed_authors(
                     if seed:
                         if is_new_author:
                             source_new_author_count += 1
-                        log_line(log_callback, f"  发现作者种子 {inspected_count}/{max_seed_works}: {video_url}")
+                        log_line(log_callback, f"  发现作者种子 本话题 {source_inspected_count}/{source_seed_limit}，累计 {inspected_count}: {video_url}")
                 except Exception as exc:
                     inspected_count += 1
                     source_inspected_count += 1
