@@ -683,6 +683,15 @@ def _achievement_highlights_text(value: Any) -> str:
     return _join(rows)
 
 
+def _redact_sensitive_text(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"(?i)([?&](?:key|steam_web_api_key|access_token)=)[^&\s]+", r"\1<redacted>", text)
+    text = re.sub(r"(?i)\b(api[_-]?key=)[^&\s]+", r"\1<redacted>", text)
+    return text
+
+
 def _request_json(
     session: requests.Session,
     url: str,
@@ -719,12 +728,12 @@ def _request_json(
             last_exc = exc
             if attempt < max_retries - 1:
                 wait_seconds = min(30.0, 2.0 ** attempt + 1.0)
-                log_warn(log_callback, f"Steam API 请求失败，{wait_seconds:.1f} 秒后重试：{exc}")
+                log_warn(log_callback, f"Steam API 请求失败，{wait_seconds:.1f} 秒后重试：{_redact_sensitive_text(exc)}")
                 interruptible_sleep(wait_seconds, stop_event)
                 continue
             break
     if last_exc:
-        raise last_exc
+        raise RuntimeError(_redact_sensitive_text(last_exc)) from last_exc
     raise RuntimeError("Steam API 请求失败")
 
 
