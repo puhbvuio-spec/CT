@@ -37,6 +37,14 @@ CURRENT_PLAYERS_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfC
 GLOBAL_ACHIEVEMENTS_URL = "https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/"
 PUBLIC_APP_LIST_URL = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
 ISTORE_APP_LIST_URL = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
+PLAYER_SUMMARIES_URL = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/"
+PLAYER_BANS_URL = "https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/"
+FRIEND_LIST_URL = "https://api.steampowered.com/ISteamUser/GetFriendList/v1/"
+OWNED_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
+RECENT_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames/v1/"
+STEAM_LEVEL_URL = "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/"
+BADGES_URL = "https://api.steampowered.com/IPlayerService/GetBadges/v1/"
+PLAYER_ACHIEVEMENTS_URL = "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/"
 
 DEFAULT_LANGUAGE = "english"
 DEFAULT_COUNTRY = "US"
@@ -158,6 +166,126 @@ NEWS_FIELDS = [
     "查询时间",
 ]
 
+PLAYER_PROFILE_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "昵称",
+    "主页链接",
+    "头像",
+    "国家/地区",
+    "省州",
+    "城市ID",
+    "真实名",
+    "资料可见性",
+    "资料状态",
+    "在线状态",
+    "最后在线时间",
+    "账号创建时间",
+    "目标游戏是否推荐",
+    "目标游戏总游玩小时",
+    "目标游戏近两周小时",
+    "目标游戏评价时小时",
+    "目标游戏最后游玩时间",
+    "Steam等级",
+    "徽章数",
+    "公开好友数",
+    "公开游戏数",
+    "公开游戏总小时",
+    "近两周游戏数",
+    "社区封禁",
+    "VAC封禁",
+    "VAC封禁数",
+    "游戏封禁数",
+    "距上次封禁天数",
+    "经济封禁",
+    "隐私/错误",
+    "查询时间",
+]
+
+PLAYER_LIBRARY_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "库游戏AppID",
+    "库游戏名",
+    "总游玩小时",
+    "近两周游玩小时",
+    "最后游玩时间",
+    "有公开社区统计",
+    "图标",
+    "查询时间",
+]
+
+PLAYER_RECENT_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "最近游戏AppID",
+    "最近游戏名",
+    "近两周游玩小时",
+    "总游玩小时",
+    "查询时间",
+]
+
+PLAYER_ACHIEVEMENT_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "成就API名",
+    "成就名称",
+    "成就描述",
+    "是否解锁",
+    "解锁时间",
+    "查询时间",
+]
+
+PLAYER_BADGE_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "徽章ID",
+    "等级",
+    "XP",
+    "稀有度",
+    "完成时间",
+    "关联AppID",
+    "社区物品ID",
+    "边框颜色",
+    "查询时间",
+]
+
+PLAYER_FRIEND_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "目标AppID",
+    "目标游戏名",
+    "SteamID",
+    "好友SteamID",
+    "关系",
+    "加好友时间",
+    "查询时间",
+]
+
+PLAYER_SHEETS_FIELDS = {
+    "玩家画像": PLAYER_PROFILE_FIELDS,
+    "玩家游戏库": PLAYER_LIBRARY_FIELDS,
+    "最近游玩": PLAYER_RECENT_FIELDS,
+    "目标游戏成就": PLAYER_ACHIEVEMENT_FIELDS,
+    "玩家徽章": PLAYER_BADGE_FIELDS,
+    "玩家好友": PLAYER_FRIEND_FIELDS,
+}
+
 
 @dataclass(frozen=True)
 class SteamWorkItem:
@@ -177,6 +305,36 @@ class SteamAppBundle:
     app_row: dict[str, Any]
     review_rows: list[dict[str, Any]]
     news_rows: list[dict[str, Any]]
+    meta: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SteamPlayerContext:
+    steamid: str
+    target_appid: int | None = None
+    target_game_name: str = ""
+    source_type: str = "玩家评论"
+    source: str = ""
+    voted_up: str = ""
+    target_play_hours: str = ""
+    target_recent_hours: str = ""
+    target_review_hours: str = ""
+    target_last_played: str = ""
+
+    @property
+    def checkpoint_key(self) -> str:
+        target = str(self.target_appid or "none")
+        return f"{target}|{self.steamid}".lower()
+
+
+@dataclass
+class SteamPlayerBundle:
+    profile_row: dict[str, Any]
+    library_rows: list[dict[str, Any]]
+    recent_rows: list[dict[str, Any]]
+    achievement_rows: list[dict[str, Any]]
+    badge_rows: list[dict[str, Any]]
+    friend_rows: list[dict[str, Any]]
     meta: dict[str, Any]
 
 
@@ -202,6 +360,28 @@ def parse_app_ids(value: str | list[str] | tuple[str, ...]) -> list[int]:
     return appids
 
 
+def parse_steam_ids(value: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Extract 64-bit SteamIDs from plain values or Steam profile URLs."""
+    if isinstance(value, str):
+        lines = value.splitlines()
+    else:
+        lines = list(value or [])
+    steamids: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        matches = re.findall(r"(?<!\d)(7656119\d{10})(?!\d)", text)
+        if not matches and text.isdigit() and len(text) >= 16:
+            matches = [text]
+        for steamid in matches:
+            if steamid not in seen:
+                seen.add(steamid)
+                steamids.append(steamid)
+    return steamids
+
+
 def normalize_keywords(value: str | list[str] | tuple[str, ...]) -> list[str]:
     if isinstance(value, str):
         lines = value.splitlines()
@@ -218,6 +398,96 @@ def normalize_keywords(value: str | list[str] | tuple[str, ...]) -> list[str]:
             seen.add(key)
             keywords.append(text)
     return keywords
+
+
+def read_player_contexts_from_xlsx(path: str, limit: int = 0) -> list[SteamPlayerContext]:
+    """Read Steam player contexts from an existing workbook, preferably the 玩家评论 sheet."""
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    sheet_name = "玩家评论" if "玩家评论" in workbook.sheetnames else workbook.sheetnames[0]
+    worksheet = workbook[sheet_name]
+    rows = worksheet.iter_rows(values_only=True)
+    try:
+        header = [str(value or "").strip() for value in next(rows)]
+    except StopIteration:
+        return []
+    index = {name: pos for pos, name in enumerate(header) if name}
+    contexts: list[SteamPlayerContext] = []
+    seen: set[str] = set()
+    for row in rows:
+        steamid = _row_value(row, index, "SteamID")
+        if not steamid:
+            continue
+        appid_text = _row_value(row, index, "AppID") or _row_value(row, index, "目标AppID")
+        target_appid = _safe_int(appid_text)
+        context = SteamPlayerContext(
+            steamid=str(steamid).strip(),
+            target_appid=target_appid,
+            target_game_name=_row_value(row, index, "游戏名") or _row_value(row, index, "目标游戏名"),
+            source_type=_row_value(row, index, "来源类型") or "玩家评论表",
+            source=_row_value(row, index, "搜索词"),
+            voted_up=_row_value(row, index, "是否推荐"),
+            target_play_hours=_row_value(row, index, "总游玩小时") or _row_value(row, index, "目标游戏总游玩小时"),
+            target_recent_hours=_row_value(row, index, "近两周游玩小时") or _row_value(row, index, "目标游戏近两周小时"),
+            target_review_hours=_row_value(row, index, "评价时游玩小时") or _row_value(row, index, "目标游戏评价时小时"),
+            target_last_played=_row_value(row, index, "最后游玩时间") or _row_value(row, index, "目标游戏最后游玩时间"),
+        )
+        key = context.checkpoint_key
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(context)
+        if limit and len(contexts) >= limit:
+            break
+    return contexts
+
+
+def player_contexts_from_steam_ids(
+    steam_ids: str | list[str],
+    *,
+    target_appid: int | None = None,
+    target_game_name: str = "",
+) -> list[SteamPlayerContext]:
+    return [
+        SteamPlayerContext(
+            steamid=steamid,
+            target_appid=target_appid,
+            target_game_name=target_game_name,
+            source_type="直接输入",
+        )
+        for steamid in parse_steam_ids(steam_ids)
+    ]
+
+
+def player_contexts_from_review_rows(rows: list[dict[str, Any]], limit: int = 0) -> list[SteamPlayerContext]:
+    contexts: list[SteamPlayerContext] = []
+    seen: set[str] = set()
+    for row in rows:
+        steamid = str(row.get("SteamID") or "").strip()
+        if not steamid:
+            continue
+        target_appid = _safe_int(row.get("AppID"))
+        context = SteamPlayerContext(
+            steamid=steamid,
+            target_appid=target_appid,
+            target_game_name=str(row.get("游戏名") or ""),
+            source_type=str(row.get("来源类型") or "玩家评论"),
+            source=str(row.get("搜索词") or ""),
+            voted_up=str(row.get("是否推荐") or ""),
+            target_play_hours=str(row.get("总游玩小时") or ""),
+            target_recent_hours=str(row.get("近两周游玩小时") or ""),
+            target_review_hours=str(row.get("评价时游玩小时") or ""),
+            target_last_played=str(row.get("最后游玩时间") or ""),
+        )
+        key = context.checkpoint_key
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(context)
+        if limit and len(contexts) >= limit:
+            break
+    return contexts
 
 
 def parse_date_range(start_date: str, end_date: str) -> tuple[datetime, datetime]:
@@ -1019,6 +1289,226 @@ def fetch_achievement_count(
     return count
 
 
+def fetch_player_summaries(
+    session: requests.Session,
+    api_key: str,
+    steamids: list[str],
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for chunk in _chunks(steamids, 100):
+        payload = _request_json(
+            session,
+            PLAYER_SUMMARIES_URL,
+            params={"key": api_key, "steamids": ",".join(chunk)},
+            timeout=timeout,
+            request_delay=request_delay,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+        players = ((payload or {}).get("response") or {}).get("players", []) if isinstance(payload, dict) else []
+        for player in players:
+            if isinstance(player, dict) and player.get("steamid"):
+                result[str(player.get("steamid"))] = player
+    return result
+
+
+def fetch_player_bans(
+    session: requests.Session,
+    api_key: str,
+    steamids: list[str],
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for chunk in _chunks(steamids, 100):
+        payload = _request_json(
+            session,
+            PLAYER_BANS_URL,
+            params={"key": api_key, "steamids": ",".join(chunk)},
+            timeout=timeout,
+            request_delay=request_delay,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+        players = payload.get("players", []) if isinstance(payload, dict) else []
+        for player in players:
+            if isinstance(player, dict) and player.get("SteamId"):
+                result[str(player.get("SteamId"))] = player
+    return result
+
+
+def fetch_friend_list(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> list[dict[str, Any]]:
+    payload = _request_json(
+        session,
+        FRIEND_LIST_URL,
+        params={"key": api_key, "steamid": steamid, "relationship": "friend", "format": "json"},
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    friends = ((payload or {}).get("friendslist") or {}).get("friends", []) if isinstance(payload, dict) else []
+    return [friend for friend in friends if isinstance(friend, dict)] if isinstance(friends, list) else []
+
+
+def fetch_owned_games(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> tuple[int | None, list[dict[str, Any]]]:
+    payload = _request_json(
+        session,
+        OWNED_GAMES_URL,
+        params={
+            "key": api_key,
+            "steamid": steamid,
+            "include_appinfo": 1,
+            "include_played_free_games": 1,
+            "format": "json",
+        },
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    response = payload.get("response", {}) if isinstance(payload, dict) else {}
+    games = response.get("games", [])
+    return _safe_int(response.get("game_count")), [game for game in games if isinstance(game, dict)] if isinstance(games, list) else []
+
+
+def fetch_recent_games(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> list[dict[str, Any]]:
+    payload = _request_json(
+        session,
+        RECENT_GAMES_URL,
+        params={"key": api_key, "steamid": steamid, "count": 0, "format": "json"},
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    games = ((payload or {}).get("response") or {}).get("games", []) if isinstance(payload, dict) else []
+    return [game for game in games if isinstance(game, dict)] if isinstance(games, list) else []
+
+
+def fetch_steam_level(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> str:
+    payload = _request_json(
+        session,
+        STEAM_LEVEL_URL,
+        params={"key": api_key, "steamid": steamid, "format": "json"},
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    response = payload.get("response", {}) if isinstance(payload, dict) else {}
+    return str(response.get("player_level", ""))
+
+
+def fetch_player_badges(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> list[dict[str, Any]]:
+    payload = _request_json(
+        session,
+        BADGES_URL,
+        params={"key": api_key, "steamid": steamid, "format": "json"},
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    badges = ((payload or {}).get("response") or {}).get("badges", []) if isinstance(payload, dict) else []
+    return [badge for badge in badges if isinstance(badge, dict)] if isinstance(badges, list) else []
+
+
+def fetch_player_achievements(
+    session: requests.Session,
+    api_key: str,
+    steamid: str,
+    appid: int,
+    *,
+    language: str,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> list[dict[str, Any]]:
+    payload = _request_json(
+        session,
+        PLAYER_ACHIEVEMENTS_URL,
+        params={"key": api_key, "steamid": steamid, "appid": appid, "l": language},
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    stats = payload.get("playerstats", {}) if isinstance(payload, dict) else {}
+    achievements = stats.get("achievements", []) if isinstance(stats, dict) else []
+    return [achievement for achievement in achievements if isinstance(achievement, dict)] if isinstance(achievements, list) else []
+
+
 def _base_app_row(item: SteamWorkItem, query_time: str) -> dict[str, Any]:
     return {
         "来源类型": item.source_type,
@@ -1188,6 +1678,440 @@ def _build_news_row(item: SteamWorkItem, app_data: dict[str, Any], news: dict[st
     }
 
 
+def collect_player_bundle(
+    context: SteamPlayerContext,
+    *,
+    api_key: str,
+    language: str,
+    summary: dict[str, Any] | None = None,
+    ban: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> SteamPlayerBundle:
+    config = config or {}
+    timeout = float(config.get("request_timeout", 30) or 30)
+    request_delay = float(config.get("request_delay", 0.2) or 0.0)
+    collect_owned_games = _config_bool(config, "collect_player_owned_games", "是")
+    collect_recent_games = _config_bool(config, "collect_player_recent_games", "是")
+    collect_target_achievements = _config_bool(config, "collect_player_target_achievements", "是")
+    collect_badges = _config_bool(config, "collect_player_badges", "是")
+    collect_friends = _config_bool(config, "collect_player_friends", "是")
+    owned_games_limit = max(0, int(config.get("player_owned_games_limit", 0) or 0))
+    session = requests.Session()
+    query_time = _now_text()
+    summary = summary or {}
+    ban = ban or {}
+    errors: list[str] = []
+
+    level = ""
+    try:
+        level = fetch_steam_level(
+            session,
+            api_key,
+            context.steamid,
+            timeout=timeout,
+            request_delay=request_delay,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+    except Exception as exc:
+        errors.append(f"level: {exc}")
+
+    game_count: int | None = None
+    owned_games: list[dict[str, Any]] = []
+    if collect_owned_games:
+        try:
+            game_count, owned_games = fetch_owned_games(
+                session,
+                api_key,
+                context.steamid,
+                timeout=timeout,
+                request_delay=request_delay,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+        except Exception as exc:
+            errors.append(f"owned_games: {exc}")
+
+    recent_games: list[dict[str, Any]] = []
+    if collect_recent_games:
+        try:
+            recent_games = fetch_recent_games(
+                session,
+                api_key,
+                context.steamid,
+                timeout=timeout,
+                request_delay=request_delay,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+        except Exception as exc:
+            errors.append(f"recent_games: {exc}")
+
+    badges: list[dict[str, Any]] = []
+    if collect_badges:
+        try:
+            badges = fetch_player_badges(
+                session,
+                api_key,
+                context.steamid,
+                timeout=timeout,
+                request_delay=request_delay,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+        except Exception as exc:
+            errors.append(f"badges: {exc}")
+
+    friends: list[dict[str, Any]] = []
+    if collect_friends:
+        try:
+            friends = fetch_friend_list(
+                session,
+                api_key,
+                context.steamid,
+                timeout=timeout,
+                request_delay=request_delay,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+        except Exception as exc:
+            errors.append(f"friends: {exc}")
+
+    achievements: list[dict[str, Any]] = []
+    if collect_target_achievements and context.target_appid:
+        try:
+            achievements = fetch_player_achievements(
+                session,
+                api_key,
+                context.steamid,
+                context.target_appid,
+                language=language,
+                timeout=timeout,
+                request_delay=request_delay,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+        except Exception as exc:
+            errors.append(f"achievements: {exc}")
+
+    if collect_owned_games and game_count is None and not owned_games:
+        errors.append("游戏库私密或为空")
+    if not summary:
+        errors.append("玩家公开资料为空")
+
+    if owned_games_limit:
+        owned_games = sorted(owned_games, key=lambda game: int(game.get("playtime_forever", 0) or 0), reverse=True)[:owned_games_limit]
+
+    library_total_hours = sum(float(game.get("playtime_forever", 0) or 0) / 60 for game in owned_games)
+    profile_row = _build_player_profile_row(
+        context,
+        summary,
+        ban,
+        query_time,
+        level=level,
+        badge_count=len(badges),
+        friend_count=len(friends),
+        game_count=game_count if game_count is not None else len(owned_games),
+        library_total_hours=library_total_hours,
+        recent_count=len(recent_games),
+        errors=errors,
+    )
+    return SteamPlayerBundle(
+        profile_row=profile_row,
+        library_rows=[_build_player_library_row(context, game, query_time) for game in owned_games],
+        recent_rows=[_build_player_recent_row(context, game, query_time) for game in recent_games],
+        achievement_rows=[_build_player_achievement_row(context, achievement, query_time) for achievement in achievements],
+        badge_rows=[_build_player_badge_row(context, badge, query_time) for badge in badges],
+        friend_rows=[_build_player_friend_row(context, friend, query_time) for friend in friends],
+        meta={
+            "library_count": len(owned_games),
+            "recent_count": len(recent_games),
+            "achievement_count": len(achievements),
+            "badge_count": len(badges),
+            "friend_count": len(friends),
+        },
+    )
+
+
+def _player_base_row(context: SteamPlayerContext, query_time: str) -> dict[str, Any]:
+    return {
+        "来源类型": context.source_type,
+        "搜索词": context.source,
+        "目标AppID": context.target_appid or "",
+        "目标游戏名": context.target_game_name,
+        "SteamID": context.steamid,
+        "查询时间": query_time,
+    }
+
+
+def _build_player_profile_row(
+    context: SteamPlayerContext,
+    summary: dict[str, Any],
+    ban: dict[str, Any],
+    query_time: str,
+    *,
+    level: str = "",
+    badge_count: int = 0,
+    friend_count: int = 0,
+    game_count: int = 0,
+    library_total_hours: float = 0.0,
+    recent_count: int = 0,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "昵称": summary.get("personaname", ""),
+            "主页链接": summary.get("profileurl", ""),
+            "头像": summary.get("avatarfull") or summary.get("avatarmedium") or summary.get("avatar", ""),
+            "国家/地区": summary.get("loccountrycode", ""),
+            "省州": summary.get("locstatecode", ""),
+            "城市ID": summary.get("loccityid", ""),
+            "真实名": summary.get("realname", ""),
+            "资料可见性": summary.get("communityvisibilitystate", ""),
+            "资料状态": summary.get("profilestate", ""),
+            "在线状态": summary.get("personastate", ""),
+            "最后在线时间": _format_timestamp(summary.get("lastlogoff")),
+            "账号创建时间": _format_timestamp(summary.get("timecreated")),
+            "目标游戏是否推荐": context.voted_up,
+            "目标游戏总游玩小时": context.target_play_hours,
+            "目标游戏近两周小时": context.target_recent_hours,
+            "目标游戏评价时小时": context.target_review_hours,
+            "目标游戏最后游玩时间": context.target_last_played,
+            "Steam等级": level,
+            "徽章数": badge_count,
+            "公开好友数": friend_count,
+            "公开游戏数": game_count or "",
+            "公开游戏总小时": round(library_total_hours, 1) if library_total_hours else "",
+            "近两周游戏数": recent_count or "",
+            "社区封禁": _yes_no(ban.get("CommunityBanned")),
+            "VAC封禁": _yes_no(ban.get("VACBanned")),
+            "VAC封禁数": ban.get("NumberOfVACBans", ""),
+            "游戏封禁数": ban.get("NumberOfGameBans", ""),
+            "距上次封禁天数": ban.get("DaysSinceLastBan", ""),
+            "经济封禁": ban.get("EconomyBan", ""),
+            "隐私/错误": _join(errors or []),
+        }
+    )
+    return row
+
+
+def _build_player_library_row(context: SteamPlayerContext, game: dict[str, Any], query_time: str) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "库游戏AppID": game.get("appid", ""),
+            "库游戏名": game.get("name", ""),
+            "总游玩小时": _minutes_to_hours(game.get("playtime_forever")),
+            "近两周游玩小时": _minutes_to_hours(game.get("playtime_2weeks")),
+            "最后游玩时间": _format_timestamp(game.get("rtime_last_played")),
+            "有公开社区统计": _yes_no(game.get("has_community_visible_stats")),
+            "图标": game.get("img_icon_url", ""),
+        }
+    )
+    return row
+
+
+def _build_player_recent_row(context: SteamPlayerContext, game: dict[str, Any], query_time: str) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "最近游戏AppID": game.get("appid", ""),
+            "最近游戏名": game.get("name", ""),
+            "近两周游玩小时": _minutes_to_hours(game.get("playtime_2weeks")),
+            "总游玩小时": _minutes_to_hours(game.get("playtime_forever")),
+        }
+    )
+    return row
+
+
+def _build_player_achievement_row(context: SteamPlayerContext, achievement: dict[str, Any], query_time: str) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "成就API名": achievement.get("apiname", ""),
+            "成就名称": achievement.get("name", ""),
+            "成就描述": achievement.get("description", ""),
+            "是否解锁": _yes_no(int(achievement.get("achieved", 0) or 0) == 1),
+            "解锁时间": _format_timestamp(achievement.get("unlocktime")),
+        }
+    )
+    return row
+
+
+def _build_player_badge_row(context: SteamPlayerContext, badge: dict[str, Any], query_time: str) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "徽章ID": badge.get("badgeid", ""),
+            "等级": badge.get("level", ""),
+            "XP": badge.get("xp", ""),
+            "稀有度": badge.get("scarcity", ""),
+            "完成时间": _format_timestamp(badge.get("completion_time")),
+            "关联AppID": badge.get("appid", ""),
+            "社区物品ID": badge.get("communityitemid", ""),
+            "边框颜色": badge.get("border_color", ""),
+        }
+    )
+    return row
+
+
+def _build_player_friend_row(context: SteamPlayerContext, friend: dict[str, Any], query_time: str) -> dict[str, Any]:
+    row = _player_base_row(context, query_time)
+    row.update(
+        {
+            "好友SteamID": friend.get("steamid", ""),
+            "关系": friend.get("relationship", ""),
+            "加好友时间": _format_timestamp(friend.get("friend_since")),
+        }
+    )
+    return row
+
+
+def write_player_enrichment_rows(
+    contexts: list[SteamPlayerContext],
+    *,
+    api_key: str,
+    language: str,
+    writer,
+    checkpoint=None,
+    config: dict[str, Any] | None = None,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> dict[str, int]:
+    config = config or {}
+    if not contexts:
+        return {"players": 0, "library_rows": 0, "recent_rows": 0, "achievement_rows": 0, "badge_rows": 0, "friend_rows": 0}
+    if not api_key:
+        log_warn(log_callback, "玩家画像增强需要 Steam Web API Key，已跳过。")
+        return {"players": 0, "library_rows": 0, "recent_rows": 0, "achievement_rows": 0, "badge_rows": 0, "friend_rows": 0}
+
+    max_players = max(0, int(config.get("max_player_profiles", config.get("max_review_players", 2000)) or 0))
+    parallel_workers = max(1, min(8, int(config.get("player_parallel_workers", 2) or 2)))
+    timeout = float(config.get("request_timeout", 30) or 30)
+    request_delay = float(config.get("request_delay", 0.2) or 0.0)
+    contexts = dedupe_player_contexts(contexts, max_players)
+    steamids = [context.steamid for context in contexts]
+    log_line(log_callback, f"开始增强 Steam 评论玩家画像：{len(contexts)} 人，并发 {parallel_workers}。")
+
+    session = requests.Session()
+    try:
+        summary_map = fetch_player_summaries(
+            session,
+            api_key,
+            steamids,
+            timeout=timeout,
+            request_delay=request_delay,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+    except Exception as exc:
+        log_warn(log_callback, f"玩家公开资料批量获取失败，将继续尝试逐项信息：{exc}")
+        summary_map = {}
+    try:
+        ban_map = fetch_player_bans(
+            session,
+            api_key,
+            steamids,
+            timeout=timeout,
+            request_delay=request_delay,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+    except Exception as exc:
+        log_warn(log_callback, f"玩家封禁信息批量获取失败：{exc}")
+        ban_map = {}
+
+    stats = {"players": 0, "library_rows": 0, "recent_rows": 0, "achievement_rows": 0, "badge_rows": 0, "friend_rows": 0}
+    futures: dict[Any, SteamPlayerContext] = {}
+    with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+        for context in contexts:
+            if wait_if_paused(pause_event, stop_event) or should_stop(stop_event):
+                break
+            if checkpoint is not None:
+                claimed, claim_status = checkpoint.claim_item(context.checkpoint_key, positive_count_fields=("player_count",))
+                if not claimed:
+                    if claim_status == "completed":
+                        log_line(log_callback, f"断点跳过已完成玩家：{context.checkpoint_key}")
+                    continue
+            futures[
+                executor.submit(
+                    collect_player_bundle,
+                    context,
+                    api_key=api_key,
+                    language=language,
+                    summary=summary_map.get(context.steamid, {}),
+                    ban=ban_map.get(context.steamid, {}),
+                    config=config,
+                    log_callback=log_callback,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                )
+            ] = context
+
+        total = len(futures)
+        for index, future in enumerate(as_completed(futures), start=1):
+            context = futures[future]
+            if should_stop(stop_event):
+                if checkpoint is not None:
+                    checkpoint.release_item(context.checkpoint_key)
+                continue
+            try:
+                bundle = future.result()
+            except InterruptedError:
+                if checkpoint is not None:
+                    checkpoint.release_item(context.checkpoint_key)
+                continue
+            except Exception as exc:
+                if checkpoint is not None:
+                    checkpoint.release_item(context.checkpoint_key)
+                log_warn(log_callback, f"[{index}/{total}] 玩家画像增强失败 {context.steamid}: {exc}")
+                continue
+
+            _write_player_bundle(writer, bundle)
+            stats["players"] += 1
+            stats["library_rows"] += len(bundle.library_rows)
+            stats["recent_rows"] += len(bundle.recent_rows)
+            stats["achievement_rows"] += len(bundle.achievement_rows)
+            stats["badge_rows"] += len(bundle.badge_rows)
+            stats["friend_rows"] += len(bundle.friend_rows)
+            if checkpoint is not None:
+                checkpoint.mark_completed(context.checkpoint_key, {"player_count": 1, **bundle.meta})
+            log_line(
+                log_callback,
+                f"[{index}/{total}] 完成玩家画像 {context.steamid}："
+                f"库 {len(bundle.library_rows)}，最近 {len(bundle.recent_rows)}，"
+                f"成就 {len(bundle.achievement_rows)}，徽章 {len(bundle.badge_rows)}，好友 {len(bundle.friend_rows)}。",
+            )
+    return stats
+
+
+def _write_player_bundle(writer, bundle: SteamPlayerBundle) -> None:
+    writer.writerow("玩家画像", bundle.profile_row)
+    for row in bundle.library_rows:
+        writer.writerow("玩家游戏库", row)
+    for row in bundle.recent_rows:
+        writer.writerow("最近游玩", row)
+    for row in bundle.achievement_rows:
+        writer.writerow("目标游戏成就", row)
+    for row in bundle.badge_rows:
+        writer.writerow("玩家徽章", row)
+    for row in bundle.friend_rows:
+        writer.writerow("玩家好友", row)
+
+
 def _movie_url(movie: dict[str, Any]) -> str:
     webm = movie.get("webm") if isinstance(movie.get("webm"), dict) else {}
     mp4 = movie.get("mp4") if isinstance(movie.get("mp4"), dict) else {}
@@ -1203,6 +2127,42 @@ def _to_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_value(row: tuple[Any, ...], index: dict[str, int], name: str) -> str:
+    pos = index.get(name)
+    if pos is None or pos >= len(row):
+        return ""
+    return str(row[pos] or "").strip()
+
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), max(1, size))]
+
+
+def dedupe_player_contexts(contexts: list[SteamPlayerContext], limit: int = 0) -> list[SteamPlayerContext]:
+    deduped: list[SteamPlayerContext] = []
+    seen: set[str] = set()
+    for context in contexts:
+        if not context.steamid:
+            continue
+        key = context.checkpoint_key
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(context)
+        if limit and len(deduped) >= limit:
+            break
+    return deduped
 
 
 def run_steam_api_spider(
@@ -1240,6 +2200,8 @@ def run_steam_api_spider(
     save_batch_size = max(1, int(config.get("save_batch_size", 10) or 10))
     collect_current_players = _config_bool(config, "collect_current_players", "是")
     collect_achievements = _config_bool(config, "collect_achievements", "否")
+    collect_review_player_profiles = _config_bool(config, "collect_review_player_profiles", "否")
+    max_review_players = max(0, int(config.get("max_review_players", config.get("max_player_profiles", 2000)) or 0))
     include_non_games = str(config.get("include_non_games", "否") or "否")
 
     scope = {
@@ -1254,6 +2216,14 @@ def run_steam_api_spider(
         "max_apps_per_keyword": max_apps_per_keyword,
         "collect_current_players": collect_current_players,
         "collect_achievements": collect_achievements,
+        "collect_review_player_profiles": collect_review_player_profiles,
+        "max_review_players": max_review_players,
+        "collect_player_owned_games": str(config.get("collect_player_owned_games", "是") or "是"),
+        "player_owned_games_limit": int(config.get("player_owned_games_limit", 0) or 0),
+        "collect_player_recent_games": str(config.get("collect_player_recent_games", "是") or "是"),
+        "collect_player_target_achievements": str(config.get("collect_player_target_achievements", "是") or "是"),
+        "collect_player_badges": str(config.get("collect_player_badges", "是") or "是"),
+        "collect_player_friends": str(config.get("collect_player_friends", "是") or "是"),
         "include_non_games": include_non_games,
     }
     checkpoint = open_task_checkpoint(
@@ -1270,6 +2240,14 @@ def run_steam_api_spider(
             "max_news",
             "collect_current_players",
             "collect_achievements",
+            "collect_review_player_profiles",
+            "max_review_players",
+            "collect_player_owned_games",
+            "player_owned_games_limit",
+            "collect_player_recent_games",
+            "collect_player_target_achievements",
+            "collect_player_badges",
+            "collect_player_friends",
             "include_non_games",
         ),
     )
@@ -1281,7 +2259,7 @@ def run_steam_api_spider(
     output_path, writer = open_checkpointed_multi_sheet_writer(
         checkpoint,
         default_output_path,
-        {"游戏信息": APP_FIELDS, "玩家评论": REVIEW_FIELDS, "新闻": NEWS_FIELDS},
+        {"游戏信息": APP_FIELDS, "玩家评论": REVIEW_FIELDS, "新闻": NEWS_FIELDS, **PLAYER_SHEETS_FIELDS},
         log_callback,
         autosave_every=save_batch_size,
     )
@@ -1372,12 +2350,31 @@ def run_steam_api_spider(
                     writer.writerow("玩家评论", row)
                 for row in bundle.news_rows:
                     writer.writerow("新闻", row)
-                checkpoint.mark_completed(item.checkpoint_key, bundle.meta)
+                player_stats = {}
+                if collect_review_player_profiles and bundle.review_rows:
+                    player_config = dict(config)
+                    player_config["max_player_profiles"] = max_review_players
+                    contexts = player_contexts_from_review_rows(bundle.review_rows, limit=max_review_players)
+                    player_stats = write_player_enrichment_rows(
+                        contexts,
+                        api_key=api_key,
+                        language=language,
+                        writer=writer,
+                        config=player_config,
+                        log_callback=log_callback,
+                        stop_event=stop_event,
+                        pause_event=pause_event,
+                    )
+                if should_stop(stop_event):
+                    checkpoint.release_item(item.checkpoint_key)
+                    continue
+                checkpoint.mark_completed(item.checkpoint_key, {**bundle.meta, **player_stats})
                 completed_this_run += 1
                 log_line(
                     log_callback,
                     f"[{index}/{total}] 完成 {bundle.app_row.get('游戏名') or item.appid}，"
-                    f"评论 {len(bundle.review_rows)}，新闻 {len(bundle.news_rows)}。",
+                    f"评论 {len(bundle.review_rows)}，新闻 {len(bundle.news_rows)}，"
+                    f"画像 {player_stats.get('players', 0) if player_stats else 0}。",
                 )
     finally:
         try:
@@ -1390,5 +2387,98 @@ def run_steam_api_spider(
         log_warn(log_callback, f"Steam API 任务已停止，本轮完成 {completed_this_run} 个采集项。")
     else:
         log_line(log_callback, f"Steam API 任务完成，本轮完成 {completed_this_run} 个采集项。")
+    finish_callback(output_path)
+    return output_path
+
+
+def run_steam_player_profiles_spider(
+    api_key: str,
+    xlsx_path: str,
+    steam_ids: str | list[str],
+    target_appid_or_url: str,
+    target_game_name: str,
+    language: str,
+    log_callback,
+    finish_callback,
+    stop_event,
+    *,
+    pause_event=None,
+    config: dict[str, Any] | None = None,
+):
+    config = config or {}
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        raise ValueError("Steam 评论玩家画像补采需要填写 Steam Web API Key。")
+    language = str(language or DEFAULT_LANGUAGE).strip() or DEFAULT_LANGUAGE
+    target_appids = parse_app_ids(target_appid_or_url)
+    target_appid = target_appids[0] if target_appids else None
+    max_players = max(0, int(config.get("max_player_profiles", 2000) or 0))
+
+    contexts: list[SteamPlayerContext] = []
+    xlsx_path = str(xlsx_path or "").strip()
+    if xlsx_path:
+        if not Path(xlsx_path).exists():
+            raise ValueError(f"玩家评论 Excel 不存在：{xlsx_path}")
+        contexts.extend(read_player_contexts_from_xlsx(xlsx_path))
+    contexts.extend(
+        player_contexts_from_steam_ids(
+            steam_ids,
+            target_appid=target_appid,
+            target_game_name=str(target_game_name or "").strip(),
+        )
+    )
+    contexts = dedupe_player_contexts(contexts, max_players)
+    if not contexts:
+        raise ValueError("没有识别到可补采的 SteamID。")
+
+    scope = {
+        "player_targets": [context.checkpoint_key for context in contexts],
+        "language": language,
+        "max_player_profiles": max_players,
+        "collect_player_owned_games": str(config.get("collect_player_owned_games", "是") or "是"),
+        "player_owned_games_limit": int(config.get("player_owned_games_limit", 0) or 0),
+        "collect_player_recent_games": str(config.get("collect_player_recent_games", "是") or "是"),
+        "collect_player_target_achievements": str(config.get("collect_player_target_achievements", "是") or "是"),
+        "collect_player_badges": str(config.get("collect_player_badges", "是") or "是"),
+        "collect_player_friends": str(config.get("collect_player_friends", "是") or "是"),
+    }
+    checkpoint = open_task_checkpoint("steam_player_profiles", scope, log_callback)
+    default_output_path = build_output_path(
+        "steam",
+        f"steam_player_profiles_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+        channel="player_profiles",
+    )
+    output_path, writer = open_checkpointed_multi_sheet_writer(
+        checkpoint,
+        default_output_path,
+        PLAYER_SHEETS_FIELDS,
+        log_callback,
+        autosave_every=max(1, int(config.get("save_batch_size", 10) or 10)),
+    )
+    checkpoint.add_output_path(output_path)
+    try:
+        stats = write_player_enrichment_rows(
+            contexts,
+            api_key=api_key,
+            language=language,
+            writer=writer,
+            checkpoint=checkpoint,
+            config=config,
+            log_callback=log_callback,
+            stop_event=stop_event,
+            pause_event=pause_event,
+        )
+        log_line(
+            log_callback,
+            f"Steam 玩家画像补采完成：玩家 {stats.get('players', 0)}，"
+            f"游戏库行 {stats.get('library_rows', 0)}，最近游玩 {stats.get('recent_rows', 0)}，"
+            f"成就 {stats.get('achievement_rows', 0)}，徽章 {stats.get('badge_rows', 0)}，好友 {stats.get('friend_rows', 0)}。",
+        )
+    finally:
+        try:
+            writer.save()
+        except Exception:
+            pass
+        checkpoint.close_run()
     finish_callback(output_path)
     return output_path
