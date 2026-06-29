@@ -13,6 +13,18 @@ def _lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+def _parallel_windows_param() -> ConfigParam:
+    return ConfigParam(
+        "parallel_windows",
+        "作者主页并发窗口数",
+        kind="int",
+        default=1,
+        minimum=1,
+        maximum=4,
+        tooltip="作者主页阶段同时开启几个浏览器窗口；断点运行时锁会避免多个窗口进入同一作者主页。",
+    )
+
+
 class TikTokKeywordWindow(SimpleToolWindow):
     tool_id = "tiktok_keyword_metrics"
 
@@ -103,6 +115,7 @@ class TikTokKeywordAuthorWorksWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _parallel_windows_param(),
             ConfigParam("max_seed_works", "关键词入口最多检查作品数", kind="int", default=300, minimum=1, maximum=5000),
             ConfigParam("max_authors", "最多进入作者主页数", kind="int", default=100, minimum=1, maximum=1000),
             ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
@@ -117,7 +130,7 @@ class TikTokKeywordAuthorWorksWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.tiktok.keyword_author_works import run_tiktok_keyword_author_works_spider
 
-        config = {k: v for k, v in values.items() if k in ("quick_mode", "max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "page_load_timeout", "scroll_interval", "profile_scroll_interval", "no_new_scroll_limit", "scroll_px", "detail_load_timeout", "detail_delay_min", "detail_delay_max")}
+        config = {k: v for k, v in values.items() if k in ("quick_mode", "parallel_windows", "max_seed_works", "max_authors", "max_profile_works_per_author", "max_search_scrolls", "max_profile_scrolls", "page_load_timeout", "scroll_interval", "profile_scroll_interval", "no_new_scroll_limit", "scroll_px", "detail_load_timeout", "detail_delay_min", "detail_delay_max")}
         return run_tiktok_keyword_author_works_spider(
             _lines(values["keywords"]),
             values["limit_time"],
@@ -166,6 +179,7 @@ class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
 
     def tool_config_params(self):
         return [
+            _parallel_windows_param(),
             ConfigParam("max_seed_works", "每个话题最多检查种子视频数", kind="int", default=300, minimum=1, maximum=5000),
             ConfigParam("max_authors", "每个话题最多进入作者主页数", kind="int", default=300, minimum=1, maximum=2000),
             ConfigParam("max_profile_works_per_author", "非快速模式每个作者最多采集作品数", kind="int", default=50, minimum=1, maximum=2000),
@@ -180,7 +194,7 @@ class TikTokHashtagAuthorWorksWindow(SimpleToolWindow):
     def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
         from src.platforms.tiktok.hashtag_author_works import run_tiktok_hashtag_author_works_spider
 
-        config = {k: v for k, v in values.items() if k in ("quick_mode", "max_seed_works", "max_authors", "max_profile_works_per_author", "max_topic_scrolls", "max_profile_scrolls", "page_load_timeout", "scroll_interval", "profile_scroll_interval", "no_new_scroll_limit", "scroll_px", "detail_load_timeout", "detail_delay_min", "detail_delay_max")}
+        config = {k: v for k, v in values.items() if k in ("quick_mode", "parallel_windows", "max_seed_works", "max_authors", "max_profile_works_per_author", "max_topic_scrolls", "max_profile_scrolls", "page_load_timeout", "scroll_interval", "profile_scroll_interval", "no_new_scroll_limit", "scroll_px", "detail_load_timeout", "detail_delay_min", "detail_delay_max")}
         return run_tiktok_hashtag_author_works_spider(
             _lines(values["hashtags"]),
             values["limit_time"],

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from queue import Empty, Queue
 
 try:
     from playwright.sync_api import sync_playwright
@@ -22,6 +24,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
+from src.core.parallel import AtomicCounter, ThreadSafeWriter, normalize_parallel_windows
 from src.platforms.x_twitter.page_recovery import wait_for_x_page_recovery
 from src.platforms.x_twitter.keyword import (
     MAX_SEARCH_SCROLLS,
@@ -359,6 +362,187 @@ def collect_seed_authors(
     return authors
 
 
+def collect_keyword_author_works_with_parallel_windows(
+    author_seeds: list[AuthorSeed],
+    *,
+    checkpoint,
+    output_path: str,
+    writer,
+    cdp_port_or_url,
+    log_callback,
+    stop_event=None,
+    pause_event=None,
+    config=None,
+    parallel_windows: int = 1,
+    browser_choice: str | None = None,
+    page_timeout: int = PAGE_LOAD_TIMEOUT,
+    scroll_interval_min: float = SCROLL_DELAY,
+    scroll_interval_max: float = SCROLL_DELAY,
+    no_new_scroll_limit: int = NO_NEW_SCROLL_LIMIT,
+    max_profile_scrolls: int = DEFAULT_MAX_SCROLLS,
+    max_profile_works: int = QUICK_PROFILE_WORK_LIMIT,
+    scroll_px: int = SCROLL_PX,
+    initial_load_delay: float = INITIAL_LOAD_DELAY,
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+    search_entry_enabled: bool = False,
+) -> int:
+    if not author_seeds:
+        return 0
+    worker_count = min(normalize_parallel_windows({"parallel_windows": parallel_windows}), len(author_seeds))
+    safe_writer = ThreadSafeWriter(writer)
+    completed_counter = AtomicCounter(0)
+    work_queue: Queue[tuple[int, AuthorSeed]] = Queue()
+    for index, seed in enumerate(author_seeds, 1):
+        work_queue.put((index, seed))
+
+    log_line(log_callback, f"Parallel X keyword-author windows enabled: {worker_count}. Runtime locks prevent duplicate profile pages.")
+
+    def _worker(worker_index: int) -> int:
+        owner_id = f"{checkpoint.run_id}:x-keyword-author-window-{worker_index}"
+        processed = 0
+        page = None
+        transient_skip_state = make_x_transient_skip_state(config or {})
+        with sync_playwright() as worker_playwright:
+            _, context = connect_existing_chromium(worker_playwright, cdp_port_or_url, browser=browser_choice)
+            page = context.new_page()
+            try:
+                while not should_stop(stop_event):
+                    if wait_if_paused(pause_event, stop_event):
+                        break
+                    try:
+                        index, seed = work_queue.get_nowait()
+                    except Empty:
+                        break
+                    seed_key = normalize_x_url(seed.profile_url).strip().lower()
+                    try:
+                        claimed, claim_status = checkpoint.claim_item(seed.profile_url, positive_count_fields=("works_count",))
+                        if not claimed:
+                            log_line(log_callback, f"[W{worker_index} {index}/{len(author_seeds)}] skip {claim_status}: {seed.profile_url}")
+                            continue
+                        runtime_claimed, _ = checkpoint.claim_runtime_item(
+                            seed_key,
+                            namespace="x_profile_page",
+                            owner_id=owner_id,
+                        )
+                        if not runtime_claimed:
+                            checkpoint.release_item(seed.profile_url)
+                            log_line(log_callback, f"[W{worker_index} {index}/{len(author_seeds)}] profile active in another window, skip this run: {seed.profile_url}")
+                            continue
+
+                        log_line(log_callback, f"[W{worker_index} {index}/{len(author_seeds)}] author profile: {seed.profile_url}")
+                        profile_ready = navigate_to_profile(
+                            page,
+                            seed.profile_url,
+                            log_callback,
+                            page_timeout=page_timeout,
+                            stop_event=stop_event,
+                            pause_event=pause_event,
+                            initial_delay=initial_load_delay,
+                            recovery_config=config,
+                            use_search_entry=search_entry_enabled,
+                        )
+                        extracted_profile = (
+                            extract_profile_record(
+                                page,
+                                seed.profile_url,
+                                log_callback,
+                                page_timeout=page_timeout,
+                                stop_event=stop_event,
+                                needs_navigation=False,
+                                recovery_config=config,
+                            )
+                            if profile_ready
+                            else None
+                        )
+                        profile_record_ok = bool(extracted_profile)
+                        profile_record = extracted_profile or {}
+
+                        works_collected_ok = False
+                        try:
+                            if not profile_ready:
+                                raise RuntimeError("profile page not ready")
+                            works = collect_profile_tweets(
+                                page,
+                                None,
+                                seed.profile_url,
+                                max_profile_scrolls,
+                                False,
+                                None,
+                                None,
+                                False,
+                                0,
+                                log_callback,
+                                stop_event=stop_event,
+                                writer=None,
+                                page_timeout=page_timeout,
+                                scroll_delay_min=scroll_interval_min,
+                                scroll_delay_max=scroll_interval_max,
+                                no_new_scroll_limit=no_new_scroll_limit,
+                                pause_event=pause_event,
+                                max_collect=max_profile_works,
+                                scroll_px=scroll_px,
+                                initial_load_delay=initial_load_delay,
+                                page_already_loaded=True,
+                                include_reposts=False,
+                                recovery_config=config,
+                                transient_skip_state=transient_skip_state,
+                                transient_retry=False,
+                            )
+                            works_collected_ok = True
+                        except XTransientProfileSkipped as exc:
+                            checkpoint.release_item(seed.profile_url)
+                            log_warn(log_callback, f"  [W{worker_index}] transient X skip: {seed.profile_url}; {exc}")
+                            continue
+                        except Exception as exc:
+                            log_warn(log_callback, f"  [W{worker_index}] author works failed: {exc}")
+                            works = []
+
+                        safe_writer.writerow(build_author_row(seed, profile_record, works, limit_time_bool, start_dt, end_dt))
+                        safe_writer.save()
+                        if profile_ready and profile_record_ok and works_collected_ok:
+                            checkpoint.mark_completed(
+                                seed.profile_url,
+                                {
+                                    "output_path": output_path,
+                                    "index": index,
+                                    "works_count": len(works),
+                                    "worker": worker_index,
+                                },
+                            )
+                            completed_counter.next()
+                        else:
+                            checkpoint.release_item(seed.profile_url)
+                            log_warn(log_callback, f"  [W{worker_index}] incomplete; checkpoint not completed.")
+                        processed += 1
+                        log_line(log_callback, f"  [W{worker_index}] wrote author {seed.account_id or seed.profile_url}, works={len(works)}")
+                    except Exception as exc:
+                        checkpoint.release_item(seed.profile_url)
+                        log_warn(log_callback, f"  [W{worker_index}] failed: {seed.profile_url}; {exc}")
+                    finally:
+                        try:
+                            checkpoint.release_runtime_item(seed_key, namespace="x_profile_page", owner_id=owner_id)
+                        except Exception:
+                            pass
+                        work_queue.task_done()
+            finally:
+                try:
+                    if page is not None and not page.is_closed():
+                        page.close()
+                except Exception:
+                    pass
+        return processed
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(_worker, worker_index) for worker_index in range(1, worker_count + 1)]
+        for future in as_completed(futures):
+            future.result()
+
+    safe_writer.save()
+    return completed_counter.value
+
+
 def run_x_keyword_author_works_spider(
     keywords_list,
     adv_params,
@@ -392,6 +576,7 @@ def run_x_keyword_author_works_spider(
     search_refresh_interval = float(config.get("search_refresh_interval", 5.0))
     browser_choice = config.get("browser")
     search_entry_enabled = use_profile_search_entry(config)
+    parallel_windows = normalize_parallel_windows(config)
 
     completed_path = None
     search_page = profile_page = works_page = None
@@ -458,6 +643,44 @@ def run_x_keyword_author_works_spider(
             checkpoint.add_output_path(output_path)
 
             author_seeds = list(authors.values())[:max_authors]
+            if parallel_windows > 1:
+                for opened_page in (search_page, profile_page, works_page):
+                    try:
+                        if opened_page is not None and not opened_page.is_closed():
+                            opened_page.close()
+                    except Exception:
+                        pass
+                search_page = profile_page = works_page = None
+                collect_keyword_author_works_with_parallel_windows(
+                    author_seeds,
+                    checkpoint=checkpoint,
+                    output_path=output_path,
+                    writer=writer,
+                    cdp_port_or_url=cdp_port_or_url,
+                    log_callback=log_callback,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    config=config,
+                    parallel_windows=parallel_windows,
+                    browser_choice=browser_choice,
+                    page_timeout=page_timeout,
+                    scroll_interval_min=scroll_interval_min,
+                    scroll_interval_max=scroll_interval_max,
+                    no_new_scroll_limit=no_new_scroll_limit,
+                    max_profile_scrolls=max_profile_scrolls,
+                    max_profile_works=max_profile_works,
+                    scroll_px=scroll_px,
+                    initial_load_delay=initial_load_delay,
+                    limit_time_bool=limit_time_bool,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    search_entry_enabled=search_entry_enabled,
+                )
+                writer.save()
+                completed_path = output_path
+                log_line(log_callback, f"完成，已保存：{output_path}")
+                return
+
             total_authors = len(author_seeds)
             pending_authors = [{"seed": seed, "transient_retry": False} for seed in author_seeds]
             deferred_authors: list[AuthorSeed] = []

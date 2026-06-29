@@ -350,6 +350,52 @@ class TaskCheckpoint:
             self._write_locked(data)
             return True, "claimed"
 
+    def claim_runtime_item(self, key: str, namespace: str = "runtime", owner_id: str | None = None) -> tuple[bool, str]:
+        """Claim a temporary runtime lock that does not affect completed state.
+
+        This is used by in-process parallel browser windows to avoid opening the
+        same author/profile page at the same time while still allowing separate
+        checkpoint completion keys such as "topic|profile".
+        """
+        raw_key = str(key).strip().lower()
+        if not raw_key:
+            return False, "empty"
+        normalized = f"runtime:{str(namespace or 'runtime').strip().lower()}:{raw_key}"
+        lock_owner = str(owner_id or self.run_id)
+        with _path_lock(self.path):
+            data = self._load()
+            self._prune_runtime_state(data)
+            active = data.setdefault("active", {})
+            current = active.get(normalized)
+            if isinstance(current, dict) and current.get("owner_id") != lock_owner:
+                self._write_locked(data)
+                return False, "active"
+            active[normalized] = {
+                "status": "running",
+                "run_id": self.run_id,
+                "owner_id": lock_owner,
+                "pid": os.getpid(),
+                "claimed_at": _now(),
+                "updated_at": _now(),
+                "updated_ts": _timestamp(),
+            }
+            self._write_locked(data)
+            return True, "claimed"
+
+    def release_runtime_item(self, key: str, namespace: str = "runtime", owner_id: str | None = None) -> None:
+        raw_key = str(key).strip().lower()
+        if not raw_key:
+            return
+        normalized = f"runtime:{str(namespace or 'runtime').strip().lower()}:{raw_key}"
+        lock_owner = str(owner_id or self.run_id)
+        with _path_lock(self.path):
+            data = self._load()
+            active = data.setdefault("active", {})
+            current = active.get(normalized)
+            if isinstance(current, dict) and current.get("owner_id") == lock_owner:
+                active.pop(normalized, None)
+            self._write_locked(data)
+
     def release_item(self, key: str) -> None:
         normalized = str(key).strip().lower()
         if not normalized:

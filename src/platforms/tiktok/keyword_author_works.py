@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from queue import Empty, Queue
 
 try:
     from playwright.sync_api import sync_playwright
@@ -22,6 +24,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
+from src.core.parallel import AtomicCounter, ThreadSafeWriter, normalize_parallel_windows
 from src.platforms.tiktok.keyword import (
     MAX_SEARCH_SCROLLS,
     SEARCH_SCROLL_PAUSE,
@@ -436,6 +439,188 @@ def collect_seed_authors(
     return authors
 
 
+def collect_author_works_with_parallel_windows(
+    seeds: list[TikTokAuthorSeed],
+    *,
+    checkpoint,
+    output_path: str,
+    writer,
+    cdp_port_or_url: str,
+    log_callback,
+    stop_event=None,
+    pause_event=None,
+    parallel_windows: int = 1,
+    page_timeout: int = PAGE_LOAD_TIMEOUT,
+    max_profile_scrolls: int = DEFAULT_MAX_SCROLLS,
+    max_profile_works: int = QUICK_PROFILE_WORK_LIMIT,
+    profile_scroll_interval: float = SCROLL_INTERVAL_SECONDS,
+    no_new_scroll_limit: int = NO_NEW_SCROLL_LIMIT,
+    scroll_px: int = SCROLL_PX,
+    detail_load_timeout: int = DETAIL_LOAD_TIMEOUT,
+    detail_delay_min: float = DETAIL_DELAY_MIN_SECONDS,
+    detail_delay_max: float = DETAIL_DELAY_MAX_SECONDS,
+    limit_time_bool: bool = False,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+    author_sheet_name: str = "鍗氫富淇℃伅",
+    video_sheet_name: str = "鍗氫富瀵瑰簲瑙嗛",
+    author_row_builder=build_author_sheet_row,
+    video_row_builder=build_video_row,
+    checkpoint_key_builder=None,
+    total_label: str | None = None,
+) -> int:
+    if not seeds:
+        return 0
+    worker_count = normalize_parallel_windows({"parallel_windows": parallel_windows})
+    worker_count = min(worker_count, len(seeds))
+    checkpoint_key_builder = checkpoint_key_builder or (lambda seed: seed.profile_url)
+    total_label = total_label or str(len(seeds))
+    safe_writer = ThreadSafeWriter(writer)
+    raw_writer = safe_writer.raw
+    start_video_index = 0
+    if hasattr(raw_writer, "worksheets") and video_sheet_name in raw_writer.worksheets:
+        start_video_index = max(0, raw_writer.worksheets[video_sheet_name].max_row - 1)
+    video_counter = AtomicCounter(start_video_index)
+    completed_counter = AtomicCounter(0)
+
+    work_queue: Queue[tuple[int, TikTokAuthorSeed]] = Queue()
+    for index, seed in enumerate(seeds, 1):
+        work_queue.put((index, seed))
+
+    log_line(log_callback, f"Parallel author windows enabled: {worker_count}. Runtime locks prevent duplicate profile pages.")
+
+    def _worker(worker_index: int) -> int:
+        owner_id = f"{checkpoint.run_id}:tiktok-author-window-{worker_index}"
+        processed = 0
+        profile_info_page = profile_page = works_detail_page = None
+        with sync_playwright() as worker_playwright:
+            _, context = connect_existing_chromium(worker_playwright, cdp_port_or_url)
+            profile_info_page = context.new_page()
+            profile_page = context.new_page()
+            works_detail_page = context.new_page()
+            try:
+                while not should_stop(stop_event):
+                    if wait_if_paused(pause_event, stop_event):
+                        break
+                    try:
+                        index, seed = work_queue.get_nowait()
+                    except Empty:
+                        break
+                    checkpoint_key = str(checkpoint_key_builder(seed))
+                    try:
+                        claimed, claim_status = checkpoint.claim_item(checkpoint_key, positive_count_fields=("works_count",))
+                        if not claimed:
+                            if claim_status == "active":
+                                log_line(log_callback, f"[W{worker_index} {index}/{total_label}] 跳过正在处理的作者：{seed.profile_url}")
+                            else:
+                                log_line(log_callback, f"[W{worker_index} {index}/{total_label}] 跳过已完成作者：{seed.profile_url}")
+                            continue
+
+                        profile_lock_key = normalize_profile_url(seed.profile_url) or seed.profile_url
+                        runtime_claimed, _ = checkpoint.claim_runtime_item(
+                            profile_lock_key,
+                            namespace="tiktok_profile_page",
+                            owner_id=owner_id,
+                        )
+                        if not runtime_claimed:
+                            checkpoint.release_item(checkpoint_key)
+                            log_line(log_callback, f"[W{worker_index} {index}/{total_label}] 作者主页已有窗口在采，跳过本轮：{seed.profile_url}")
+                            continue
+
+                        log_line(log_callback, f"[W{worker_index} {index}/{total_label}] 进入博主主页：{seed.profile_url}")
+                        profile_record_ok = False
+                        try:
+                            profile_record = extract_profile_row(
+                                profile_info_page,
+                                seed.profile_url,
+                                page_load_timeout=page_timeout,
+                                captcha_wait=8,
+                                stop_event=stop_event,
+                            )
+                            profile_record_ok = True
+                        except Exception as exc:
+                            log_warn(log_callback, f"  [W{worker_index}] 博主信息补充失败：{exc}")
+                            profile_record = {}
+
+                        works_collected_ok = False
+                        try:
+                            works = collect_profile_video_details(
+                                profile_page,
+                                works_detail_page,
+                                seed.profile_url,
+                                None,
+                                None,
+                                False,
+                                log_callback,
+                                stop_event=stop_event,
+                                pause_event=pause_event,
+                                max_scrolls=max_profile_scrolls,
+                                max_collect=max_profile_works,
+                                page_load_timeout=page_timeout,
+                                scroll_interval=profile_scroll_interval,
+                                no_new_scroll_limit=no_new_scroll_limit,
+                                scroll_px=scroll_px,
+                                detail_load_timeout=detail_load_timeout,
+                                detail_delay_min=detail_delay_min,
+                                detail_delay_max=detail_delay_max,
+                            )
+                            works_collected_ok = True
+                        except Exception as exc:
+                            log_warn(log_callback, f"  [W{worker_index}] 博主作品采集失败：{exc}")
+                            works = []
+
+                        safe_writer.writerow(
+                            author_sheet_name,
+                            author_row_builder(seed, profile_record, works, limit_time_bool, start_dt, end_dt),
+                        )
+                        for work in works:
+                            safe_writer.writerow(video_sheet_name, video_row_builder(video_counter.next(), seed, profile_record, work))
+                        safe_writer.save()
+                        if profile_record_ok and works_collected_ok and len(works) > 0:
+                            checkpoint.mark_completed(
+                                checkpoint_key,
+                                {
+                                    "output_path": output_path,
+                                    "index": index,
+                                    "profile_url": seed.profile_url,
+                                    "works_count": len(works),
+                                    "worker": worker_index,
+                                },
+                            )
+                            completed_counter.next()
+                        else:
+                            checkpoint.release_item(checkpoint_key)
+                            log_warn(log_callback, f"  [W{worker_index}] incomplete; checkpoint not completed.")
+                        processed += 1
+                        log_line(log_callback, f"  [W{worker_index}] wrote author {seed.author_id or seed.profile_url}, works={len(works)}")
+                    finally:
+                        try:
+                            checkpoint.release_runtime_item(
+                                normalize_profile_url(seed.profile_url) or seed.profile_url,
+                                namespace="tiktok_profile_page",
+                                owner_id=owner_id,
+                            )
+                        except Exception:
+                            pass
+                        work_queue.task_done()
+            finally:
+                for opened_page in (profile_info_page, profile_page, works_detail_page):
+                    try:
+                        if opened_page is not None and not opened_page.is_closed():
+                            opened_page.close()
+                    except Exception:
+                        pass
+        return processed
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(_worker, worker_index) for worker_index in range(1, worker_count + 1)]
+        for future in as_completed(futures):
+            future.result()
+
+    safe_writer.save()
+    return completed_counter.value
+
+
 def run_tiktok_keyword_author_works_spider(
     keywords_list,
     limit_time_str,
@@ -466,6 +651,7 @@ def run_tiktok_keyword_author_works_spider(
     detail_load_timeout = int(config.get("detail_load_timeout", DETAIL_LOAD_TIMEOUT))
     detail_delay_min = float(config.get("detail_delay_min", DETAIL_DELAY_MIN_SECONDS))
     detail_delay_max = float(config.get("detail_delay_max", DETAIL_DELAY_MAX_SECONDS))
+    parallel_windows = normalize_parallel_windows(config)
 
     completed_path = None
     search_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
@@ -554,7 +740,47 @@ def run_tiktok_keyword_author_works_spider(
             if hasattr(writer, "worksheets") and "博主对应视频" in writer.worksheets:
                 video_index = max(0, writer.worksheets["博主对应视频"].max_row - 1)
 
-            for index, seed in enumerate(list(authors.values())[:max_authors], 1):
+            author_seeds = list(authors.values())[:max_authors]
+            if parallel_windows > 1:
+                for opened_page in (search_page, seed_detail_page, profile_info_page, profile_page, works_detail_page):
+                    try:
+                        if opened_page is not None and not opened_page.is_closed():
+                            opened_page.close()
+                    except Exception:
+                        pass
+                search_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
+                sheet_names = list(getattr(writer, "sheets_fields", {}).keys())
+                collect_author_works_with_parallel_windows(
+                    author_seeds,
+                    checkpoint=checkpoint,
+                    output_path=output_path,
+                    writer=writer,
+                    cdp_port_or_url=cdp_port_or_url,
+                    log_callback=log_callback,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    parallel_windows=parallel_windows,
+                    page_timeout=page_timeout,
+                    max_profile_scrolls=max_profile_scrolls,
+                    max_profile_works=max_profile_works,
+                    profile_scroll_interval=profile_scroll_interval,
+                    no_new_scroll_limit=no_new_scroll_limit,
+                    scroll_px=scroll_px,
+                    detail_load_timeout=detail_load_timeout,
+                    detail_delay_min=detail_delay_min,
+                    detail_delay_max=detail_delay_max,
+                    limit_time_bool=limit_time_bool,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    author_sheet_name=sheet_names[0],
+                    video_sheet_name=sheet_names[1],
+                )
+                writer.save()
+                completed_path = output_path
+                log_line(log_callback, f"完成，已保存：{output_path}")
+                return
+
+            for index, seed in enumerate(author_seeds, 1):
                 if should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from queue import Empty, Queue
 import random
 import re
 import time
@@ -27,6 +29,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.parallel import AtomicCounter, ThreadSafeWriter, normalize_parallel_windows
 from src.core.task_checkpoint import open_checkpointed_row_writer, open_task_checkpoint
 from src.platforms.x_twitter.page_recovery import (
     check_network_reachable,
@@ -1080,6 +1083,190 @@ def build_rows(tweets: list[dict[str, str]]) -> list[dict[str, str]]:
     return rows
 
 
+def collect_profile_tweets_with_parallel_windows(
+    profile_urls: list[str],
+    *,
+    checkpoint,
+    output_path: str,
+    writer,
+    cdp_port_or_url: str,
+    log_callback,
+    stop_event=None,
+    pause_event=None,
+    config=None,
+    parallel_windows: int = 1,
+    browser_choice: str | None = None,
+    page_load_timeout_val: int = PAGE_LOAD_TIMEOUT,
+    scroll_delay_min_val: float = DEFAULT_SCROLL_DELAY_MIN,
+    scroll_delay_max_val: float = DEFAULT_SCROLL_DELAY_MAX,
+    no_new_scroll_limit_val: int = NO_NEW_SCROLL_LIMIT,
+    max_scrolls_val: int = DEFAULT_MAX_SCROLLS,
+    max_tweets_per_author: int = DEFAULT_PROFILE_TWEET_LIMIT,
+    save_batch_size_val: int = SAVE_BATCH_SIZE,
+    cooldown_min_val: float = COOLDOWN_MIN_SECONDS,
+    cooldown_max_val: float = COOLDOWN_MAX_SECONDS,
+    scroll_px_val: int = SCROLL_PX,
+    initial_load_delay_val: float = INITIAL_LOAD_DELAY,
+    consecutive_date_limit_val: int = DEFAULT_CONSECUTIVE_DATE_LIMIT,
+    guarantee_min_scrolls_val: int = GUARANTEE_MIN_SCROLLS,
+    date_window_size: int = 20,
+    search_entry_enabled: bool = False,
+) -> int:
+    if not profile_urls:
+        return 0
+    worker_count = min(normalize_parallel_windows({"parallel_windows": parallel_windows}), len(profile_urls))
+    safe_writer = ThreadSafeWriter(writer)
+    raw_writer = safe_writer.raw
+    start_row = 0
+    if hasattr(raw_writer, "worksheet"):
+        start_row = max(0, raw_writer.worksheet.max_row - 1)
+    row_counter = AtomicCounter(start_row)
+    completed_counter = AtomicCounter(0)
+
+    work_queue: Queue[tuple[int, str]] = Queue()
+    for index, profile_url in enumerate(profile_urls, 1):
+        work_queue.put((index, profile_url))
+
+    log_line(log_callback, f"Parallel X profile windows enabled: {worker_count}. Runtime locks prevent duplicate profile pages.")
+
+    def _worker(worker_index: int) -> int:
+        owner_id = f"{checkpoint.run_id}:x-profile-window-{worker_index}"
+        processed = 0
+        page = None
+        transient_skip_state = make_x_transient_skip_state(config or {})
+        with sync_playwright() as worker_playwright:
+            _, context = connect_existing_chromium(worker_playwright, cdp_port_or_url, browser=browser_choice)
+            page = context.new_page()
+            try:
+                while not should_stop(stop_event):
+                    if wait_if_paused(pause_event, stop_event):
+                        break
+                    try:
+                        profile_index, raw_profile_url = work_queue.get_nowait()
+                    except Empty:
+                        break
+
+                    profile_url = clean_profile_url(raw_profile_url)
+                    profile_lock_key = profile_url.lower()
+                    try:
+                        username = extract_profile_username(profile_url)
+                        claimed, claim_status = checkpoint.claim_item(profile_url)
+                        if not claimed:
+                            log_line(log_callback, f"[W{worker_index} {profile_index}/{len(profile_urls)}] skip {claim_status}: {profile_url}")
+                            continue
+
+                        runtime_claimed, _ = checkpoint.claim_runtime_item(
+                            profile_lock_key,
+                            namespace="x_profile_page",
+                            owner_id=owner_id,
+                        )
+                        if not runtime_claimed:
+                            checkpoint.release_item(profile_url)
+                            log_line(log_callback, f"[W{worker_index} {profile_index}/{len(profile_urls)}] profile active in another window, skip this run: {profile_url}")
+                            continue
+
+                        log_line(log_callback, f"[W{worker_index} {profile_index}/{len(profile_urls)}] profile: {profile_url}")
+                        if not navigate_to_profile(
+                            page,
+                            profile_url,
+                            log_callback,
+                            page_timeout=page_load_timeout_val,
+                            stop_event=stop_event,
+                            pause_event=pause_event,
+                            initial_delay=initial_load_delay_val,
+                            recovery_config=config,
+                            use_search_entry=search_entry_enabled,
+                        ):
+                            log_warn(log_callback, f"  [W{worker_index}] profile navigation failed: {profile_url}")
+                            checkpoint.release_item(profile_url)
+                            continue
+
+                        tweets = collect_profile_tweets(
+                            page,
+                            None,
+                            profile_url,
+                            max_scrolls_val,
+                            False,
+                            None,
+                            None,
+                            False,
+                            0,
+                            log_callback,
+                            stop_event,
+                            writer=None,
+                            row_offset=0,
+                            page_timeout=page_load_timeout_val,
+                            scroll_delay_min=scroll_delay_min_val,
+                            scroll_delay_max=scroll_delay_max_val,
+                            no_new_scroll_limit=no_new_scroll_limit_val,
+                            save_batch_size=save_batch_size_val,
+                            cooldown_min=cooldown_min_val,
+                            cooldown_max=cooldown_max_val,
+                            scroll_px=scroll_px_val,
+                            initial_load_delay=initial_load_delay_val,
+                            pause_event=pause_event,
+                            keyword=None,
+                            max_collect=max_tweets_per_author,
+                            consecutive_date_limit=consecutive_date_limit_val,
+                            guarantee_min_scrolls=guarantee_min_scrolls_val,
+                            page_already_loaded=True,
+                            date_window_size=date_window_size,
+                            recovery_config=config,
+                            transient_skip_state=transient_skip_state,
+                            transient_retry=False,
+                        )
+                        rows = [row_from_tweet(row_counter.next(), tweet) for tweet in tweets]
+                        if rows:
+                            safe_writer.writerows(rows)
+                        safe_writer.save()
+                        checkpoint.mark_completed(
+                            profile_url,
+                            {
+                                "output_path": output_path,
+                                "profile_index": profile_index,
+                                "written_count": len(tweets),
+                                "worker": worker_index,
+                            },
+                        )
+                        completed_counter.next()
+                        processed += 1
+                        log_line(log_callback, f"  [W{worker_index}] done @{username or profile_url}: wrote {len(tweets)} tweets.")
+                    except XTransientProfileSkipped as exc:
+                        checkpoint.release_item(profile_url)
+                        log_warn(log_callback, f"  [W{worker_index}] transient X skip: {profile_url}; {exc}")
+                    except PlaywrightTimeoutError:
+                        checkpoint.release_item(profile_url)
+                        log_warn(log_callback, f"  [W{worker_index}] timeout: {profile_url}")
+                    except Exception as exc:
+                        checkpoint.release_item(profile_url)
+                        log_warn(log_callback, f"  [W{worker_index}] failed: {profile_url}; {exc}")
+                    finally:
+                        try:
+                            checkpoint.release_runtime_item(
+                                profile_lock_key,
+                                namespace="x_profile_page",
+                                owner_id=owner_id,
+                            )
+                        except Exception:
+                            pass
+                        work_queue.task_done()
+            finally:
+                try:
+                    if page is not None and not page.is_closed():
+                        page.close()
+                except Exception:
+                    pass
+        return processed
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(_worker, worker_index) for worker_index in range(1, worker_count + 1)]
+        for future in as_completed(futures):
+            future.result()
+
+    safe_writer.save()
+    return completed_counter.value
+
+
 def run_x_profile_tweets_spider(
     profile_urls_text: str,
     keywords_text: str,
@@ -1116,6 +1303,7 @@ def run_x_profile_tweets_spider(
     date_window_size = int(config.get("date_window_size", 20))
     browser_choice = config.get("browser")
     search_entry_enabled = use_profile_search_entry(config)
+    parallel_windows = normalize_parallel_windows(config)
 
     completed_path = None
     page = None
@@ -1158,6 +1346,40 @@ def run_x_profile_tweets_spider(
         checkpoint.add_output_path(output_path)
             
         row_offset = 0
+
+        if parallel_windows > 1:
+            collect_profile_tweets_with_parallel_windows(
+                profile_urls,
+                checkpoint=checkpoint,
+                output_path=output_path,
+                writer=writer,
+                cdp_port_or_url=cdp_port_or_url,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                config=config,
+                parallel_windows=parallel_windows,
+                browser_choice=browser_choice,
+                page_load_timeout_val=page_load_timeout_val,
+                scroll_delay_min_val=scroll_delay_min_val,
+                scroll_delay_max_val=scroll_delay_max_val,
+                no_new_scroll_limit_val=no_new_scroll_limit_val,
+                max_scrolls_val=max_scrolls,
+                max_tweets_per_author=max_tweets_per_author,
+                save_batch_size_val=save_batch_size_val,
+                cooldown_min_val=cooldown_min_val,
+                cooldown_max_val=cooldown_max_val,
+                scroll_px_val=scroll_px_val,
+                initial_load_delay_val=initial_load_delay_val,
+                consecutive_date_limit_val=consecutive_date_limit_val,
+                guarantee_min_scrolls_val=guarantee_min_scrolls_val,
+                date_window_size=date_window_size,
+                search_entry_enabled=search_entry_enabled,
+            )
+            completed_path = output_path
+            writer.save()
+            log_line(log_callback, f"完成，已保存：{output_path}")
+            return
 
         with sync_playwright() as playwright:
             log_line(log_callback, "正在连接本地浏览器...")

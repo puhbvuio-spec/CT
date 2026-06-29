@@ -24,6 +24,7 @@ from src.core import (
     wait_if_paused,
 )
 from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
+from src.core.parallel import normalize_parallel_windows
 from src.platforms.tiktok.keyword import (
     MAX_SEARCH_SCROLLS,
     SEARCH_SCROLL_PAUSE,
@@ -47,6 +48,7 @@ from src.platforms.tiktok.keyword_author_works import (
     build_author_sheet_row,
     build_author_row,
     build_video_row,
+    collect_author_works_with_parallel_windows,
     load_seed_author_cache,
     merge_seed_author,
     quick_mode_enabled,
@@ -411,6 +413,7 @@ def run_tiktok_hashtag_author_works_spider(
     detail_load_timeout = int(config.get("detail_load_timeout", DETAIL_LOAD_TIMEOUT))
     detail_delay_min = float(config.get("detail_delay_min", DETAIL_DELAY_MIN_SECONDS))
     detail_delay_max = float(config.get("detail_delay_max", DETAIL_DELAY_MAX_SECONDS))
+    parallel_windows = normalize_parallel_windows(config)
 
     completed_path = None
     topic_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
@@ -507,8 +510,51 @@ def run_tiktok_hashtag_author_works_spider(
             if hasattr(writer, "worksheets") and "博主对应视频" in writer.worksheets:
                 video_index = max(0, writer.worksheets["博主对应视频"].max_row - 1)
 
-            total_authors = len(authors)
-            for index, seed in enumerate(authors.values(), 1):
+            author_seeds = list(authors.values())
+            if parallel_windows > 1:
+                for opened_page in (topic_page, seed_detail_page, profile_info_page, profile_page, works_detail_page):
+                    try:
+                        if opened_page is not None and not opened_page.is_closed():
+                            opened_page.close()
+                    except Exception:
+                        pass
+                topic_page = seed_detail_page = profile_info_page = profile_page = works_detail_page = None
+                sheet_names = list(getattr(writer, "sheets_fields", {}).keys())
+                collect_author_works_with_parallel_windows(
+                    author_seeds,
+                    checkpoint=checkpoint,
+                    output_path=output_path,
+                    writer=writer,
+                    cdp_port_or_url=cdp_port_or_url,
+                    log_callback=log_callback,
+                    stop_event=stop_event,
+                    pause_event=pause_event,
+                    parallel_windows=parallel_windows,
+                    page_timeout=page_timeout,
+                    max_profile_scrolls=max_profile_scrolls,
+                    max_profile_works=max_profile_works,
+                    profile_scroll_interval=profile_scroll_interval,
+                    no_new_scroll_limit=no_new_scroll_limit,
+                    scroll_px=scroll_px,
+                    detail_load_timeout=detail_load_timeout,
+                    detail_delay_min=detail_delay_min,
+                    detail_delay_max=detail_delay_max,
+                    limit_time_bool=limit_time_bool,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    author_sheet_name=sheet_names[0],
+                    video_sheet_name=sheet_names[1],
+                    author_row_builder=_author_sheet_row_for_hashtag,
+                    video_row_builder=_video_row_for_hashtag,
+                    checkpoint_key_builder=_seed_checkpoint_key,
+                )
+                writer.save()
+                completed_path = output_path
+                log_line(log_callback, f"完成，已保存：{output_path}")
+                return
+
+            total_authors = len(author_seeds)
+            for index, seed in enumerate(author_seeds, 1):
                 if should_stop(stop_event):
                     break
                 if wait_if_paused(pause_event, stop_event):

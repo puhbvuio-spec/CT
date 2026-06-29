@@ -133,7 +133,17 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "detail_delay_min": 2.0,
         "detail_delay_max": 5.0,
     },
+    "tiktok_keyword_author_works": {
+        "parallel_windows": 1,
+        "max_seed_works": 300,
+        "max_authors": 100,
+        "max_profile_works_per_author": 50,
+        "max_search_scrolls": 360,
+        "max_profile_scrolls": 500,
+        "profile_scroll_interval": 2.5,
+    },
     "tiktok_hashtag_author_works": {
+        "parallel_windows": 1,
         "max_seed_works": 300,
         "max_authors": 100,
         "max_profile_works_per_author": 50,
@@ -178,6 +188,7 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "profile_entry_mode": "直接打开",
     },
     "x_keyword_author_works": {
+        "parallel_windows": 1,
         "profile_entry_mode": "直接打开",
     },
     "x_paired_context_metrics": {
@@ -189,12 +200,14 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "cooldown_every": 3,
     },
     "x_profile_tweets": {
+        "parallel_windows": 1,
         "max_tweets_per_author": 50,
         "max_scrolls": 80,
         "initial_load_delay": 2.0,
         "profile_entry_mode": "直接打开",
     },
     "x_profile_bundle": {
+        "parallel_windows": 1,
         "max_tweets_per_author": 50,
         "max_scrolls": 80,
         "initial_load_delay": 2.0,
