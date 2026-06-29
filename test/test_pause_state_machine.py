@@ -20,7 +20,7 @@ pytest.importorskip("PyQt5")
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
-from src.core.timing import wait_if_paused, should_stop
+from src.core.timing import interruptible_sleep, wait_if_paused, should_stop
 from src.ui.base import SimpleToolWindow, FieldSpec
 from src.ui.config_dialog import ConfigParam, ConfigDialog
 
@@ -103,6 +103,43 @@ def test_wait_if_paused_resume_then_stop():
     t.join(timeout=2)
     assert not t.is_alive(), "Thread should have returned after resume"
     assert result_container["ret"] is False
+
+
+def test_interruptible_sleep_waits_through_pause():
+    """A paused sleep should not consume its timer until resumed."""
+    pause = threading.Event()
+    stop = threading.Event()
+    pause.set()
+
+    timer = threading.Timer(0.25, pause.clear)
+    timer.start()
+    started = time.monotonic()
+    try:
+        interrupted = interruptible_sleep(0.05, stop, step=0.02, pause_event=pause)
+    finally:
+        timer.cancel()
+
+    elapsed = time.monotonic() - started
+    assert interrupted is False
+    assert elapsed >= 0.24
+
+
+def test_interruptible_sleep_stops_while_paused():
+    pause = threading.Event()
+    stop = threading.Event()
+    pause.set()
+
+    timer = threading.Timer(0.15, stop.set)
+    timer.start()
+    started = time.monotonic()
+    try:
+        interrupted = interruptible_sleep(5.0, stop, step=0.02, pause_event=pause)
+    finally:
+        timer.cancel()
+
+    elapsed = time.monotonic() - started
+    assert interrupted is True
+    assert elapsed < 1.0
 
 
 # ---------------------------------------------------------------------------

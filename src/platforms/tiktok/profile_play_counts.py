@@ -129,7 +129,7 @@ def run_tiktok_profile_play_counts_spider(
                 
                 try:
                     profile_page.goto(profile_url, wait_until="domcontentloaded", timeout=page_load_timeout)
-                    interruptible_sleep(2.5, stop_event)
+                    interruptible_sleep(2.5, stop_event, pause_event=pause_event)
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  主页加载超时，跳过。")
                     profile_page.remove_listener("response", handle_response)
@@ -173,7 +173,7 @@ def run_tiktok_profile_play_counts_spider(
                         break
 
                     trigger_profile_lazy_load(profile_page)
-                    if interruptible_sleep(scroll_interval, stop_event):
+                    if interruptible_sleep(scroll_interval, stop_event, pause_event=pause_event):
                         break
 
                 # 取消该主页的监听，避免干扰下一个博主主页

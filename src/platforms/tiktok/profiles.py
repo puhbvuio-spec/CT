@@ -235,27 +235,31 @@ def _extract_profile_row_from_state(page, profile_url: str) -> dict[str, str]:
                 return _row_from_state_user(node, nested_stats, profile_url)
     return {}
 
-def _sleep(seconds: float, stop_event=None) -> bool:
+def _sleep(seconds: float, stop_event=None, pause_event=None) -> bool:
     if stop_event is not None:
-        return interruptible_sleep(seconds, stop_event)
+        return interruptible_sleep(seconds, stop_event, pause_event=pause_event)
+    if pause_event is not None:
+        return interruptible_sleep(seconds, pause_event=pause_event)
     time.sleep(seconds)
     return False
 
-def extract_profile_row(page, profile_url: str, page_load_timeout: int = 35000, captcha_wait: int = 12, stop_event=None) -> dict[str, str]:
+def extract_profile_row(page, profile_url: str, page_load_timeout: int = 35000, captcha_wait: int = 12, stop_event=None, pause_event=None) -> dict[str, str]:
     """
     进入指定的博主主页，检测人机验证码，并安全提取博主名称、ID、粉丝量、博主简介等元数据。
     如果账号不存在或已注销，进行优雅的错误处理并返回标识字段。
     """
     profile_url = normalize_profile_url(profile_url) or clean_url(profile_url)
+    wait_if_paused(pause_event, stop_event)
     page.goto(profile_url, wait_until="domcontentloaded", timeout=page_load_timeout)
     try:
+        wait_if_paused(pause_event, stop_event)
         page.wait_for_selector(
             "[data-e2e='user-title'], [data-e2e='followers-count'], script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, h1",
             timeout=10000,
         )
     except Exception:
         pass
-    if _sleep(random.uniform(2.0, 3.8), stop_event):
+    if _sleep(random.uniform(2.0, 3.8), stop_event, pause_event=pause_event):
         return {
             "博主主页链接": profile_url,
             "博主名称": "",
@@ -267,7 +271,7 @@ def extract_profile_row(page, profile_url: str, page_load_timeout: int = 35000, 
     try:
         # 检测是否弹出人机验证页面，若有则睡眠指定秒数供人工操作
         if "captcha" in page.url or page.locator("div[id^='captcha']").count() > 0:
-            _sleep(captcha_wait, stop_event)
+            _sleep(captcha_wait, stop_event, pause_event=pause_event)
     except Exception:
         pass
 
@@ -387,7 +391,7 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                 log_line(log_callback, f"[{index}/{len(profile_urls)}] 提取博主信息：{profile_url}")
                 profile_ok = False
                 try:
-                    row = extract_profile_row(page, profile_url, page_load_timeout=page_load_timeout, captcha_wait=captcha_wait)
+                    row = extract_profile_row(page, profile_url, page_load_timeout=page_load_timeout, captcha_wait=captcha_wait, stop_event=stop_event, pause_event=pause_event)
                     profile_ok = True
                     log_line(log_callback, f"  完成：{row['博主名称']} | {row['博主ID']} | 粉丝 {row['粉丝量'] or '未提取'}")
                 except Exception as exc:
@@ -408,7 +412,7 @@ def run_tiktok_profile_spider(txt_path: str, cdp_port_or_url: str, log_callback,
                     log_warn(log_callback, "  本轮未完整采集成功，未写入断点完成标记，下次会继续重试。")
                 # 每抓取 5 个博主主页进行随机冷却，以避免触发高频风控限制
                 if index % cooldown_every_val == 0:
-                    if random_cooldown(log_callback, stop_event, cooldown_min_val, cooldown_max_val):
+                    if random_cooldown(log_callback, stop_event, cooldown_min_val, cooldown_max_val, pause_event=pause_event):
                         break
 
             if not page.is_closed():

@@ -200,9 +200,11 @@ def _seed_checkpoint_key(seed: TikTokAuthorSeed) -> str:
     return f"{topic}|{seed.profile_url}"
 
 
-def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5) -> bool:
+def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback=None, page_timeout: int = PAGE_LOAD_TIMEOUT, max_attempts: int = 5, pause_event=None) -> bool:
     for attempt in range(1, max_attempts + 1):
         if should_stop(stop_event):
+            return False
+        if wait_if_paused(pause_event, stop_event):
             return False
         try:
             if attempt >= 3:
@@ -211,10 +213,10 @@ def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback
                 page.goto(source.url, wait_until="domcontentloaded", timeout=page_timeout)
         except Exception as exc:
             log_line(log_callback, f"  话题页导航失败（第 {attempt}/{max_attempts} 次）：{exc}")
-            interruptible_sleep(_retry_backoff_seconds(attempt), stop_event)
+            interruptible_sleep(_retry_backoff_seconds(attempt), stop_event, pause_event=pause_event)
             continue
 
-        interruptible_sleep(random.uniform(1.8, 2.8), stop_event)
+        interruptible_sleep(random.uniform(1.8, 2.8), stop_event, pause_event=pause_event)
         try:
             page.wait_for_selector("a[href*='/video/'], a[href*='video/']", timeout=8000)
         except Exception:
@@ -226,13 +228,13 @@ def open_hashtag_page(page, source: HashtagSource, stop_event=None, log_callback
 
         log_line(log_callback, f"  话题页出现错误态「{error_text}」（第 {attempt}/{max_attempts} 次），尝试重试...")
         cooldown = random.uniform(5.0, 9.0) if attempt <= 2 else _retry_backoff_seconds(attempt)
-        interruptible_sleep(cooldown, stop_event)
+        interruptible_sleep(cooldown, stop_event, pause_event=pause_event)
         if _click_tiktok_retry(page):
-            interruptible_sleep(random.uniform(4.0, 6.0), stop_event)
+            interruptible_sleep(random.uniform(4.0, 6.0), stop_event, pause_event=pause_event)
             if _detect_tiktok_search_error(page) is None:
                 log_line(log_callback, "  点击重试后话题页已恢复。")
                 return True
-        interruptible_sleep(_retry_backoff_seconds(attempt), stop_event)
+        interruptible_sleep(_retry_backoff_seconds(attempt), stop_event, pause_event=pause_event)
 
     log_line(log_callback, f"  话题页重试 {max_attempts} 次仍处于错误态，继续尝试采集：{source.url}")
     return False
@@ -273,7 +275,7 @@ def collect_hashtag_seed_authors(
             break
 
         log_line(log_callback, f"[{source_index}/{len(sources)}] 打开话题页：{source.label} {source.url}")
-        if not open_hashtag_page(topic_page, source, stop_event=stop_event, log_callback=log_callback, page_timeout=page_timeout):
+        if not open_hashtag_page(topic_page, source, stop_event=stop_event, log_callback=log_callback, page_timeout=page_timeout, pause_event=pause_event):
             log_warn(log_callback, f"跳过话题：页面无法正常打开或持续错误：{source.label}")
             continue
         source_seed_limit = max(1, int(max_seed_works or 1))
@@ -342,6 +344,7 @@ def collect_hashtag_seed_authors(
                         item.get("播放量", ""),
                         profile_url=item.get("博主主页链接", ""),
                         stop_event=stop_event,
+                        pause_event=pause_event,
                     )
                     inspected_count += 1
                     source_inspected_count += 1
@@ -370,7 +373,7 @@ def collect_hashtag_seed_authors(
             ):
                 break
             trigger_search_lazy_load(topic_page)
-            if interruptible_sleep(topic_scroll_pause, stop_event):
+            if interruptible_sleep(topic_scroll_pause, stop_event, pause_event=pause_event):
                 break
         if source_seen_count == 0:
             log_warn(log_callback, f"跳过话题：未发现可采集视频，可能是话题不存在、无公开内容或页面未加载成功：{source.label}")
@@ -496,6 +499,7 @@ def collect_hashtag_seed_authors_parallel(
                         stop_event=stop_event,
                         log_callback=log_callback,
                         page_timeout=page_timeout,
+                        pause_event=pause_event,
                     ):
                         log_warn(log_callback, f"[T{worker_index}] topic page not ready: {source.label}")
                         return inspected_by_worker
@@ -516,6 +520,8 @@ def collect_hashtag_seed_authors_parallel(
                         for item in new_items:
                             if _limits_reached() or should_stop(stop_event):
                                 break
+                            if wait_if_paused(pause_event, stop_event):
+                                break
                             video_url = item.get("视频链接", "")
                             reserved, current_count = _reserve_video(video_url)
                             if not reserved:
@@ -534,6 +540,7 @@ def collect_hashtag_seed_authors_parallel(
                                     item.get("播放量", ""),
                                     profile_url=item.get("博主主页链接", ""),
                                     stop_event=stop_event,
+                                    pause_event=pause_event,
                                 )
                                 if limit_time_bool and start_dt and end_dt and not in_date_range(row.get("发布时间", ""), start_dt, end_dt):
                                     log_line(log_callback, f"  [T{worker_index}] skip seed outside publish time: {row.get('发布时间') or 'unknown'}")
@@ -552,7 +559,7 @@ def collect_hashtag_seed_authors_parallel(
                         if no_new_rounds >= no_new_scroll_limit and scroll_index >= 5:
                             break
                         trigger_search_lazy_load(topic_page)
-                        if interruptible_sleep(topic_scroll_pause, stop_event):
+                        if interruptible_sleep(topic_scroll_pause, stop_event, pause_event=pause_event):
                             break
                 finally:
                     for opened_page in (topic_page, detail_page):
@@ -858,6 +865,7 @@ def run_tiktok_hashtag_author_works_spider(
                         page_load_timeout=page_timeout,
                         captcha_wait=8,
                         stop_event=stop_event,
+                        pause_event=pause_event,
                     )
                     profile_record_ok = True
                 except Exception as exc:

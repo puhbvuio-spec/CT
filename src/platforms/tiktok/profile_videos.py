@@ -429,15 +429,17 @@ def item_detail_from_state(page, video_url: str) -> dict:
     return find_item_in_state(page_state_sources(page), video_id)
 
 
-def extract_video_detail(page, video_url: str, detail_load_timeout=None) -> dict[str, str]:
+def extract_video_detail(page, video_url: str, detail_load_timeout=None, stop_event=None, pause_event=None) -> dict[str, str]:
     """
     打开视频详情页，提取并清洗视频关键指标（点赞量、评论量、收藏量、分享量、发布时间、视频描述描述等）。
     支持重试加载 JSON Rehydration 状态，并对 DOM 进行兜底解析以规避 JS 反爬风控带来的数据缺失。
     """
     if detail_load_timeout is None:
         detail_load_timeout = DETAIL_LOAD_TIMEOUT
+    wait_if_paused(pause_event, stop_event)
     page.goto(video_url, wait_until="domcontentloaded", timeout=detail_load_timeout)
     try:
+        wait_if_paused(pause_event, stop_event)
         page.wait_for_selector(
             "script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#RENDER_DATA, [data-e2e='like-count'], [data-e2e='browser-nickname']",
             timeout=8000,
@@ -447,10 +449,13 @@ def extract_video_detail(page, video_url: str, detail_load_timeout=None) -> dict
 
     item = None
     for _ in range(4):
+        if wait_if_paused(pause_event, stop_event):
+            break
         item = item_detail_from_state(page, video_url)
         if item and (item.get("createTime") or item.get("create_time")):
             break
-        page.wait_for_timeout(1000)
+        if interruptible_sleep(1.0, stop_event, pause_event=pause_event):
+            break
 
     desc = format_plain_text(item.get("desc") or item.get("description")) if item else ""
     publish_time = format_publish_time(item.get("createTime") or item.get("create_time")) if item else ""
@@ -548,7 +553,7 @@ def wait_after_detail(log_callback, stop_event=None, pause_event=None,
     if wait_if_paused(pause_event, stop_event):
         return True
     seconds = random.uniform(detail_delay_min, detail_delay_max)
-    return interruptible_sleep(seconds, stop_event)
+    return interruptible_sleep(seconds, stop_event, pause_event=pause_event)
 
 
 def process_video_batch(
@@ -596,7 +601,7 @@ def process_video_batch(
 
             detail = {"video_url": video_url}
             if get_video_info_bool or get_comments_bool or limit_time_bool:
-                detail = extract_video_detail(detail_page, video_url, detail_load_timeout=detail_load_timeout)
+                detail = extract_video_detail(detail_page, video_url, detail_load_timeout=detail_load_timeout, stop_event=stop_event, pause_event=pause_event)
                 published_at = detail.get("published_at", "")
 
                 # 发布日期范围校验
@@ -675,7 +680,7 @@ def process_video_batch(
                     break
                 seconds = random.uniform(batch_wait_min, batch_wait_max)
                 log_line(log_callback, f"    已写入 {written_count} 条，随机等待 {seconds:.1f} 秒。")
-                if interruptible_sleep(seconds, stop_event):
+                if interruptible_sleep(seconds, stop_event, pause_event=pause_event):
                     break
                 batch_written = 0
         except Exception as exc:
@@ -720,6 +725,7 @@ def collect_profile_video_details(
     no_new_count = 0
     processed_count = 0
 
+    wait_if_paused(pause_event, stop_event)
     profile_page.goto(normalized_profile_url, wait_until="domcontentloaded", timeout=page_load_timeout)
     try:
         profile_page.wait_for_selector(
@@ -728,7 +734,7 @@ def collect_profile_video_details(
         )
     except Exception:
         pass
-    interruptible_sleep(2.0, stop_event)
+    interruptible_sleep(2.0, stop_event, pause_event=pause_event)
 
     for scroll_index in range(max(1, int(max_scrolls or DEFAULT_MAX_SCROLLS))):
         if should_stop(stop_event):
@@ -751,7 +757,7 @@ def collect_profile_video_details(
             if wait_if_paused(pause_event, stop_event):
                 break
             try:
-                detail = extract_video_detail(detail_page, video_url, detail_load_timeout=detail_load_timeout)
+                detail = extract_video_detail(detail_page, video_url, detail_load_timeout=detail_load_timeout, stop_event=stop_event, pause_event=pause_event)
                 published_at = detail.get("published_at", "")
                 if limit_time_bool and start_dt and end_dt:
                     publish_dt = parse_publish_date(published_at)
@@ -776,7 +782,7 @@ def collect_profile_video_details(
             break
 
         trigger_profile_lazy_load(profile_page, scroll_px=scroll_px)
-        if interruptible_sleep(scroll_interval, stop_event):
+        if interruptible_sleep(scroll_interval, stop_event, pause_event=pause_event):
             break
 
     return details
@@ -937,8 +943,9 @@ def run_tiktok_profile_videos_spider(
                 if fetch_play_counts_bool:
                     profile_page.on("response", handle_response)
                 try:
+                    wait_if_paused(pause_event, stop_event)
                     profile_page.goto(profile_url, wait_until="domcontentloaded", timeout=page_load_timeout)
-                    interruptible_sleep(2.5, stop_event)
+                    interruptible_sleep(2.5, stop_event, pause_event=pause_event)
                 except PlaywrightTimeoutError:
                     log_warn(log_callback, "  主页加载超时，跳过。")
                     checkpoint.release_item(profile_url)
@@ -1026,7 +1033,7 @@ def run_tiktok_profile_videos_spider(
                         break
 
                     trigger_profile_lazy_load(profile_page, scroll_px=scroll_px_val)
-                    if interruptible_sleep(scroll_interval, stop_event):
+                    if interruptible_sleep(scroll_interval, stop_event, pause_event=pause_event):
                         break
 
                 # 离开前处理最后一批零碎的链接

@@ -831,7 +831,7 @@ def _retry_backoff_seconds(attempt: int) -> float:
     return min(2 ** attempt + random.uniform(0, 1), 15.0)
 
 
-def open_search_page(page, keyword: str, stop_event=None, log_callback=None, max_attempts: int = 5):
+def open_search_page(page, keyword: str, stop_event=None, log_callback=None, max_attempts: int = 5, pause_event=None):
     """
     打开 TikTok 关键词搜索页，并检测错误态自动重试。
 
@@ -844,6 +844,8 @@ def open_search_page(page, keyword: str, stop_event=None, log_callback=None, max
     for attempt in range(1, max_attempts + 1):
         if should_stop(stop_event):
             return
+        if wait_if_paused(pause_event, stop_event):
+            return
         # 第 3 次及以后改用 reload 复用会话缓存，有时比重新 goto 更易恢复
         use_reload = attempt >= 3
         try:
@@ -853,11 +855,11 @@ def open_search_page(page, keyword: str, stop_event=None, log_callback=None, max
                 page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
         except Exception as exc:
             log_line(log_callback, f"  搜索页导航失败（第 {attempt}/{max_attempts} 次）：{exc}")
-            interruptible_sleep(_retry_backoff_seconds(attempt), stop_event)
+            interruptible_sleep(_retry_backoff_seconds(attempt), stop_event, pause_event=pause_event)
             continue
 
         # 等待页面初步稳定，再判断是否出现视频卡片或错误态
-        interruptible_sleep(random.uniform(1.8, 2.8), stop_event)
+        interruptible_sleep(random.uniform(1.8, 2.8), stop_event, pause_event=pause_event)
 
         error_text = _detect_tiktok_search_error(page)
         if error_text is None:
@@ -867,26 +869,28 @@ def open_search_page(page, keyword: str, stop_event=None, log_callback=None, max
         # 错误态多为风控触发，立刻点重试常因风控未冷却而再次出错。先等待冷却。
         cooldown = random.uniform(5.0, 9.0) if attempt <= 2 else _retry_backoff_seconds(attempt)
         log_line(log_callback, f"  等待风控冷却 {cooldown:.1f}s 后再重试...")
-        interruptible_sleep(cooldown, stop_event)
+        interruptible_sleep(cooldown, stop_event, pause_event=pause_event)
         # 优先点击页面上的重试按钮（真实鼠标坐标点击，绕过反爬对程序点击的拦截）
         if _click_tiktok_retry(page):
             # 点击后等结果加载，给 TikTok 重新渲染搜索结果的时间
-            interruptible_sleep(random.uniform(4.0, 6.0), stop_event)
+            interruptible_sleep(random.uniform(4.0, 6.0), stop_event, pause_event=pause_event)
             if _detect_tiktok_search_error(page) is None:
                 log_line(log_callback, "  点击重试后页面已恢复。")
                 return
         # 仍处于错误态，指数退避后下一轮重新导航/reload
-        interruptible_sleep(_retry_backoff_seconds(attempt), stop_event)
+        interruptible_sleep(_retry_backoff_seconds(attempt), stop_event, pause_event=pause_event)
 
     log_line(log_callback, f"  搜索页重试 {max_attempts} 次仍处于错误态，继续尝试采集（可能无结果）。")
 
 
-def extract_video_row(page, keyword: str, video_url: str, play_count: str = "", profile_url: str = "", stop_event=None) -> dict:
+def extract_video_row(page, keyword: str, video_url: str, play_count: str = "", profile_url: str = "", stop_event=None, pause_event=None) -> dict:
     # 详情页 goto 带错误态检测与重试：TikTok 详情页也可能返回错误页，
     # 命中则 reload + 退避重试，最多 2 次；仍失败则按空指标返回（让上层按发布时间为空跳过）。
     for _goto_attempt in range(3):
+        if wait_if_paused(pause_event, stop_event):
+            break
         page.goto(video_url, wait_until="domcontentloaded", timeout=25000)
-        interruptible_sleep(random.uniform(0.25, 0.55), stop_event)
+        interruptible_sleep(random.uniform(0.25, 0.55), stop_event, pause_event=pause_event)
         if _detect_tiktok_search_error(page) is None:
             break
         # 详情页错误态：reload 重试
@@ -894,8 +898,9 @@ def extract_video_row(page, keyword: str, video_url: str, play_count: str = "", 
             page.reload(wait_until="domcontentloaded", timeout=25000)
         except Exception:
             pass
-        interruptible_sleep(_retry_backoff_seconds(_goto_attempt + 1), stop_event)
+        interruptible_sleep(_retry_backoff_seconds(_goto_attempt + 1), stop_event, pause_event=pause_event)
     try:
+        wait_if_paused(pause_event, stop_event)
         page.wait_for_selector(
             "script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#RENDER_DATA, [data-e2e='like-count'], [data-e2e='browser-nickname']",
             timeout=8000,
@@ -904,13 +909,13 @@ def extract_video_row(page, keyword: str, video_url: str, play_count: str = "", 
         pass
     item = {}
     for _ in range(4):
+        if wait_if_paused(pause_event, stop_event):
+            break
         item = find_item_in_state(page_state_sources(page), extract_tiktok_video_id(video_url))
         if item and (item.get("createTime") or item.get("create_time") or item.get("desc") or item.get("description")):
             break
-        try:
-            page.wait_for_timeout(800)
-        except Exception:
-            interruptible_sleep(0.8, stop_event)
+        if interruptible_sleep(0.8, stop_event, pause_event=pause_event):
+            break
     json_metrics = item_metrics(item)
     publish_time = normalize_publish_time_text(json_metrics.get("发布时间") or extract_publish_time(page))
     author_profile = author_profile_from_item(item, profile_url or extract_author_url(video_url))
@@ -920,6 +925,7 @@ def extract_video_row(page, keyword: str, video_url: str, play_count: str = "", 
     if not publish_time:
         # 网络不稳定或纯 CSR 渲染较慢时，增加额外等待时间以确保页面渲染出时间元素
         try:
+            wait_if_paused(pause_event, stop_event)
             page.wait_for_selector("[data-e2e='video-create-time'], span[data-e2e='browser-nickname'] + span + span, time", timeout=8000)
             item = find_item_in_state(page_state_sources(page), extract_tiktok_video_id(video_url))
             json_metrics = item_metrics(item)
@@ -967,7 +973,7 @@ def tiktok_profile_cache_key(profile_url: str) -> str:
     return match.group(1).lower() if match else normalized.lower()
 
 
-def enrich_tiktok_profile_fields(page, row: dict[str, str], cache: dict[str, dict[str, str]], log, stop_event=None) -> dict[str, str]:
+def enrich_tiktok_profile_fields(page, row: dict[str, str], cache: dict[str, dict[str, str]], log, stop_event=None, pause_event=None) -> dict[str, str]:
     """
     对详情页没有给全的作者字段，进入博主主页补齐；按作者缓存，减少重复跳转。
     """
@@ -987,6 +993,7 @@ def enrich_tiktok_profile_fields(page, row: dict[str, str], cache: dict[str, dic
                 page_load_timeout=25000,
                 captcha_wait=8,
                 stop_event=stop_event,
+                pause_event=pause_event,
             )
         except Exception as exc:
             log(f"    博主主页补充失败，保留详情页字段：{profile_url}，{exc}")
@@ -1155,13 +1162,13 @@ def _tiktok_metrics_consumer(
                             metrics_page = _recreate_page(context, metrics_page)
                         # 提取指标；goto 撞上 page 关闭则重建重试一次
                         try:
-                            row = extract_video_row(metrics_page, keyword, video_url, play_count, profile_url=profile_url, stop_event=stop_event)
+                            row = extract_video_row(metrics_page, keyword, video_url, play_count, profile_url=profile_url, stop_event=stop_event, pause_event=pause_event)
                         except Exception as row_exc:
                             if not _is_page_closed(metrics_page):
                                 raise
                             log(f"  详情页抓取失败（{row_exc}），重建页面后重试...")
                             metrics_page = _recreate_page(context, metrics_page)
-                            row = extract_video_row(metrics_page, keyword, video_url, play_count, profile_url=profile_url, stop_event=stop_event)
+                            row = extract_video_row(metrics_page, keyword, video_url, play_count, profile_url=profile_url, stop_event=stop_event, pause_event=pause_event)
 
                         # 时间范围过滤
                         if start_dt is not None:
@@ -1169,7 +1176,7 @@ def _tiktok_metrics_consumer(
                                 log(f"    跳过：发布时间不在范围内（{row['发布时间'] or '未解析'}）")
                                 continue
 
-                        row = enrich_tiktok_profile_fields(metrics_page, row, profile_cache, log, stop_event=stop_event)
+                        row = enrich_tiktok_profile_fields(metrics_page, row, profile_cache, log, stop_event=stop_event, pause_event=pause_event)
                         row["序号"] = str(serial_number)
 
                         # 写入视频信息行（加锁防并发冲突）
@@ -1352,7 +1359,7 @@ def _scrape_single_tiktok_keyword(
 
                 serial_number = 1
                 # 打开 TikTok 搜索页面（含错误态自动重试）
-                open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log)
+                open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log, pause_event=pause_event)
                 # 计算动态搜索滚动次数上限，防止无限滚动
                 scroll_limit = dynamic_search_scroll_limit(max_videos, config_max_search_scrolls)
                 seen_links: set[str] = set()
@@ -1376,7 +1383,7 @@ def _scrape_single_tiktok_keyword(
                             error_text = _detect_tiktok_search_error(search_page)
                             if error_text is not None:
                                 log(f"  滚动过程中检测到搜索页错误态「{error_text}」，尝试重试恢复...")
-                                open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log)
+                                open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log, pause_event=pause_event)
                                 no_new_visible_rounds = 0
                     else:
                         no_new_visible_rounds = 0
@@ -1419,7 +1426,7 @@ def _scrape_single_tiktok_keyword(
                             log(f"    跳过：{exc}")
                         # 每推送 20 个候选视频进行一次随机冷却，防止风控
                         if scanned_count and scanned_count % 20 == 0:
-                            if random_cooldown(log, stop_event, cooldown_min, cooldown_max):
+                            if random_cooldown(log, stop_event, cooldown_min, cooldown_max, pause_event=pause_event):
                                 break
 
                     # 各种边界条件判断，是否跳出搜索滚动循环
@@ -1438,7 +1445,7 @@ def _scrape_single_tiktok_keyword(
 
                     # 触发惰性滚动加载
                     trigger_search_lazy_load(search_page)
-                    interruptible_sleep(search_scroll_pause, stop_event)
+                    interruptible_sleep(search_scroll_pause, stop_event, pause_event=pause_event)
 
                 # 向所有详情消费者线程发送 None 哨兵值，等待它们处理完队列中剩余任务
                 if metrics_queue is not None:

@@ -964,7 +964,7 @@ def run_scraper(txt_path: str, cdp_port_or_url: str, log_callback, finish_callba
                     write_rows(writer, rows)
                     log_line(log_callback, f"  完成：写入 {len(rows)} 条。")
                     if index % 3 == 0:
-                        if random_cooldown(log_callback, stop_event, 3.0, 8.0):
+                        if random_cooldown(log_callback, stop_event, 3.0, 8.0, pause_event=pause_event):
                             break
                 except Exception as exc:
                     log_error(log_callback, f"  处理失败：{exc}")
@@ -978,4 +978,3 @@ def run_scraper(txt_path: str, cdp_port_or_url: str, log_callback, finish_callba
         completed_path = output_path
     finally:
         finish_callback(completed_path)
-

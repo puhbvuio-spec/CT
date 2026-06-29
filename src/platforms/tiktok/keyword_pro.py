@@ -107,7 +107,7 @@ def run_tiktok_keyword_pro_spider(
                 break
 
             log_line(log_callback, f"=== 本次执行完毕。等待 {timer_interval_minutes} 分钟后进行下一次执行 ===")
-            if interruptible_sleep(timer_interval_minutes * 60, stop_event):
+            if interruptible_sleep(timer_interval_minutes * 60, stop_event, pause_event=pause_event):
                 log_line(log_callback, "休眠被中断，任务终止。")
                 break
 

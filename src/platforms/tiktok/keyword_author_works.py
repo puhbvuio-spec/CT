@@ -376,7 +376,7 @@ def collect_seed_authors(
             break
 
         log_line(log_callback, f"[{keyword_index}/{len(keywords)}] 搜索作者种子：{keyword}")
-        open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log_callback)
+        open_search_page(search_page, keyword, stop_event=stop_event, log_callback=log_callback, pause_event=pause_event)
         scroll_limit = dynamic_search_scroll_limit(max_seed_works, max_search_scrolls)
         no_new_rounds = 0
 
@@ -412,6 +412,7 @@ def collect_seed_authors(
                         item.get("播放量", ""),
                         profile_url=item.get("博主主页链接", ""),
                         stop_event=stop_event,
+                        pause_event=pause_event,
                     )
                     inspected_count += 1
                     if limit_time_bool and start_dt and end_dt and not in_date_range(row.get("发布时间", ""), start_dt, end_dt):
@@ -429,7 +430,7 @@ def collect_seed_authors(
             if no_new_rounds >= no_new_scroll_limit and scroll_index >= 5:
                 break
             trigger_search_lazy_load(search_page)
-            if interruptible_sleep(search_scroll_pause, stop_event):
+            if interruptible_sleep(search_scroll_pause, stop_event, pause_event=pause_event):
                 break
         if not should_stop(stop_event):
             completed_sources.add(source_id)
@@ -536,6 +537,7 @@ def collect_author_works_with_parallel_windows(
                                 page_load_timeout=page_timeout,
                                 captcha_wait=8,
                                 stop_event=stop_event,
+                                pause_event=pause_event,
                             )
                             profile_record_ok = True
                         except Exception as exc:
@@ -801,6 +803,7 @@ def run_tiktok_keyword_author_works_spider(
                         page_load_timeout=page_timeout,
                         captcha_wait=8,
                         stop_event=stop_event,
+                        pause_event=pause_event,
                     )
                     profile_record_ok = True
                 except Exception as exc:

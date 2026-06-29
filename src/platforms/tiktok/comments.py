@@ -906,7 +906,7 @@ def fetch_comments_via_page_api(page, video_id: str, collector: CommentCollector
         if not has_more_comments(data.get("has_more")) or not next_cursor or str(next_cursor) == str(cursor):
             break
         cursor = next_cursor
-        interruptible_sleep(0.4, stop_event)
+        interruptible_sleep(0.4, stop_event, pause_event=pause_event)
 
     return total_added
 
@@ -976,7 +976,7 @@ def collect_video_comments(page, video_url: str, max_scan_comments: int, log_cal
                 break
 
             scroll_comments(page)
-            interruptible_sleep(_scroll_pause, stop_event)
+            interruptible_sleep(_scroll_pause, stop_event, pause_event=pause_event)
             collect_visible_dom_comments(page, collector, log_callback)
 
             current_count = len(collector.comments)
@@ -1118,6 +1118,7 @@ def run_tiktok_top_comments_spider(
                         min_seconds=video_batch_cooldown_min_val,
                         max_seconds=video_batch_cooldown_max_val,
                         reason=f"已连续处理 {video_batch_cooldown_every_val} 个视频，降低 TikTok 访问频率",
+                        pause_event=pause_event,
                     )
                 ):
                     log_line(log_callback, "任务已停止。")
@@ -1136,4 +1137,3 @@ def run_tiktok_top_comments_spider(
         except Exception:
             pass
         finish_callback(completed_path)
-
