@@ -26,8 +26,8 @@ class SteamApiResearchWindow(SimpleToolWindow):
                     default="english",
                 ),
                 FieldSpec("country", "商店地区代码", default="US", placeholder="US / JP / CN"),
-                FieldSpec("collect_reviews", "是否采集评论/评价摘要？", kind="combo", options=("否", "是"), default="否"),
-                FieldSpec("max_reviews", "每个游戏最多评论数（0=仅摘要）", kind="int", default=0, minimum=0, maximum=5000),
+                FieldSpec("collect_reviews", "是否采集玩家评论/评价摘要？", kind="combo", options=("否", "是"), default="否"),
+                FieldSpec("max_reviews", "每个游戏最多玩家评论数（0=仅摘要）", kind="int", default=0, minimum=0, maximum=5000),
                 FieldSpec("collect_news", "是否采集新闻？", kind="combo", options=("否", "是"), default="否"),
                 FieldSpec("max_news", "每个游戏最多新闻数", kind="int", default=5, minimum=1, maximum=100),
             ],
@@ -102,4 +102,3 @@ class SteamApiResearchWindow(SimpleToolWindow):
             pause_event=pause_event,
             config=config,
         )
-

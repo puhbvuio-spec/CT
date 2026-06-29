@@ -61,9 +61,30 @@ APP_FIELDS = [
     "支持平台",
     "支持语言",
     "年龄限制",
+    "控制器支持",
+    "PC最低配置",
+    "PC推荐配置",
+    "Mac最低配置",
+    "Mac推荐配置",
+    "Linux最低配置",
+    "Linux推荐配置",
+    "DLC AppID列表",
+    "Demo列表",
+    "所属完整游戏",
+    "安装包ID列表",
+    "套餐/版本列表",
+    "内容描述",
+    "分级信息",
+    "客服网站",
+    "客服邮箱",
+    "客服电话",
+    "第三方账号提示",
+    "DRM提示",
+    "法律声明",
     "短简介",
     "详细简介",
     "总评描述",
+    "总评分数",
     "总评数",
     "好评数",
     "差评数",
@@ -72,11 +93,16 @@ APP_FIELDS = [
     "Metacritic",
     "当前在线",
     "成就数量",
+    "成就样本列表",
     "新闻样本数",
-    "评论样本数",
+    "玩家评论样本数",
     "商店链接",
     "官网",
     "头图",
+    "胶囊图",
+    "胶囊图V5",
+    "背景图",
+    "原始背景图",
     "截图列表",
     "视频列表",
     "查询时间",
@@ -91,9 +117,21 @@ REVIEW_FIELDS = [
     "SteamID",
     "是否推荐",
     "语言",
+    "Steam购买",
+    "免费获得",
+    "抢先体验期间",
+    "主要在SteamDeck",
+    "拥有游戏数",
+    "作者评论数",
+    "总游玩小时",
+    "近两周游玩小时",
+    "评价时游玩小时",
+    "最后游玩时间",
     "有价值票数",
     "欢乐票数",
-    "游玩小时",
+    "加权评分",
+    "开发者回复",
+    "开发者回复时间",
     "发布时间",
     "最后更新时间",
     "评论链接",
@@ -110,6 +148,11 @@ NEWS_FIELDS = [
     "标题",
     "作者",
     "发布时间",
+    "来源名称",
+    "来源标签",
+    "Feed名称",
+    "Feed类型",
+    "外部链接",
     "链接",
     "内容摘要",
     "查询时间",
@@ -244,9 +287,16 @@ def _clean_text(value: Any, *, max_length: int | None = None) -> str:
     return text
 
 
+def _limit_text(value: Any, max_length: int = 12000) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_length:
+        return text[:max_length].rstrip()
+    return text
+
+
 def _join(values: list[Any]) -> str:
     cleaned = [str(value).strip() for value in values if str(value or "").strip()]
-    return "\n".join(cleaned)
+    return _limit_text("\n".join(cleaned))
 
 
 def _list_desc(values: Any) -> str:
@@ -265,8 +315,102 @@ def _format_timestamp(value: Any) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _minutes_to_hours(value: Any) -> str:
+    try:
+        return str(round(float(value or 0) / 60, 1))
+    except (TypeError, ValueError):
+        return ""
+
+
 def _yes_no(value: Any) -> str:
     return "是" if bool(value) else "否"
+
+
+def _requirements_text(value: Any, key: str) -> str:
+    if isinstance(value, dict):
+        return _clean_text(value.get(key), max_length=3000)
+    if key == "minimum":
+        return _clean_text(value, max_length=3000)
+    return ""
+
+
+def _appid_name(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    appid = str(value.get("appid") or "").strip()
+    name = str(value.get("name") or "").strip()
+    if appid and name:
+        return f"{appid} {name}"
+    return appid or name
+
+
+def _demos_text(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    rows = []
+    for item in value:
+        if isinstance(item, dict):
+            appid = str(item.get("appid") or "").strip()
+            description = _clean_text(item.get("description"), max_length=120)
+            rows.append(f"{appid} {description}".strip())
+    return _join(rows)
+
+
+def _package_groups_text(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    rows: list[str] = []
+    for group in value:
+        if not isinstance(group, dict):
+            continue
+        title = _clean_text(group.get("title") or group.get("name"), max_length=120)
+        description = _clean_text(group.get("description"), max_length=240)
+        subs = []
+        for sub in group.get("subs", []) or []:
+            if not isinstance(sub, dict):
+                continue
+            packageid = str(sub.get("packageid") or "").strip()
+            option_text = _clean_text(sub.get("option_text"), max_length=160)
+            subs.append(f"{packageid} {option_text}".strip())
+        rows.append(" | ".join(part for part in [title, description, "; ".join(subs)] if part))
+    return _join(rows)
+
+
+def _content_descriptors_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    ids = value.get("ids", [])
+    ids_text = ", ".join(str(item) for item in ids) if isinstance(ids, list) else str(ids or "")
+    notes = _clean_text(value.get("notes"), max_length=1000)
+    return " | ".join(part for part in [f"ids: {ids_text}" if ids_text else "", notes] if part)
+
+
+def _ratings_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    rows: list[str] = []
+    for rating_name, rating_data in value.items():
+        if isinstance(rating_data, dict):
+            summary = ", ".join(f"{key}={_clean_text(val, max_length=100)}" for key, val in rating_data.items())
+            rows.append(f"{rating_name}: {summary}")
+        else:
+            rows.append(f"{rating_name}: {_clean_text(rating_data, max_length=200)}")
+    return _join(rows)
+
+
+def _achievement_highlights_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    highlighted = value.get("highlighted", [])
+    if not isinstance(highlighted, list):
+        return ""
+    rows = []
+    for item in highlighted:
+        if isinstance(item, dict):
+            name = _clean_text(item.get("name"), max_length=160)
+            path = str(item.get("path") or "").strip()
+            rows.append(" | ".join(part for part in [name, path] if part))
+    return _join(rows)
 
 
 def _request_json(
@@ -648,9 +792,10 @@ def collect_steam_app_bundle(
             log_warn(log_callback, f"当前在线人数获取失败 AppID={item.appid}: {exc}")
 
     achievement_count = ""
+    achievement_sample = ""
     if collect_achievements:
         try:
-            achievement_count = fetch_achievement_count(
+            achievement_count, achievement_sample = fetch_achievement_summary(
                 session,
                 item.appid,
                 timeout=timeout,
@@ -670,6 +815,7 @@ def collect_steam_app_bundle(
         review_summary=review_summary,
         current_players=current_players,
         achievement_count=achievement_count,
+        achievement_sample=achievement_sample,
         news_count=len(news_rows),
         review_count=len(review_rows),
     )
@@ -818,7 +964,7 @@ def fetch_current_players(
     return str(response.get("player_count", ""))
 
 
-def fetch_achievement_count(
+def fetch_achievement_summary(
     session: requests.Session,
     appid: int,
     *,
@@ -827,7 +973,7 @@ def fetch_achievement_count(
     log_callback=None,
     stop_event=None,
     pause_event=None,
-) -> str:
+) -> tuple[str, str]:
     payload = _request_json(
         session,
         GLOBAL_ACHIEVEMENTS_URL,
@@ -839,7 +985,38 @@ def fetch_achievement_count(
         pause_event=pause_event,
     )
     achievements = ((payload or {}).get("achievementpercentages") or {}).get("achievements", []) if isinstance(payload, dict) else []
-    return str(len(achievements)) if isinstance(achievements, list) else ""
+    if not isinstance(achievements, list):
+        return "", ""
+    rows = []
+    for item in achievements[:50]:
+        if not isinstance(item, dict):
+            continue
+        name = _clean_text(item.get("name"), max_length=160)
+        percent = item.get("percent", "")
+        rows.append(f"{name}: {percent}%".strip())
+    return str(len(achievements)), _join(rows)
+
+
+def fetch_achievement_count(
+    session: requests.Session,
+    appid: int,
+    *,
+    timeout: float,
+    request_delay: float,
+    log_callback=None,
+    stop_event=None,
+    pause_event=None,
+) -> str:
+    count, _ = fetch_achievement_summary(
+        session,
+        appid,
+        timeout=timeout,
+        request_delay=request_delay,
+        log_callback=log_callback,
+        stop_event=stop_event,
+        pause_event=pause_event,
+    )
+    return count
 
 
 def _base_app_row(item: SteamWorkItem, query_time: str) -> dict[str, Any]:
@@ -860,6 +1037,7 @@ def _build_app_row(
     review_summary: dict[str, Any] | None = None,
     current_players: Any = "",
     achievement_count: Any = "",
+    achievement_sample: Any = "",
     news_count: int = 0,
     review_count: int = 0,
 ) -> dict[str, Any]:
@@ -871,6 +1049,15 @@ def _build_app_row(
     recommendations = data.get("recommendations") if isinstance(data.get("recommendations"), dict) else {}
     screenshots = data.get("screenshots") if isinstance(data.get("screenshots"), list) else []
     movies = data.get("movies") if isinstance(data.get("movies"), list) else []
+    pc_requirements = data.get("pc_requirements")
+    mac_requirements = data.get("mac_requirements")
+    linux_requirements = data.get("linux_requirements")
+    support_info = data.get("support_info") if isinstance(data.get("support_info"), dict) else {}
+    achievements = data.get("achievements") if isinstance(data.get("achievements"), dict) else {}
+    if not achievement_count:
+        achievement_count = achievements.get("total", "")
+    if not achievement_sample:
+        achievement_sample = _achievement_highlights_text(achievements)
     total_reviews = _to_int(review_summary.get("total_reviews"))
     total_positive = _to_int(review_summary.get("total_positive"))
     total_negative = _to_int(review_summary.get("total_negative"))
@@ -897,9 +1084,30 @@ def _build_app_row(
         "支持平台": " / ".join(key for key, enabled in platforms.items() if enabled),
         "支持语言": _clean_text(data.get("supported_languages")),
         "年龄限制": str(data.get("required_age", "")),
+        "控制器支持": data.get("controller_support", ""),
+        "PC最低配置": _requirements_text(pc_requirements, "minimum"),
+        "PC推荐配置": _requirements_text(pc_requirements, "recommended"),
+        "Mac最低配置": _requirements_text(mac_requirements, "minimum"),
+        "Mac推荐配置": _requirements_text(mac_requirements, "recommended"),
+        "Linux最低配置": _requirements_text(linux_requirements, "minimum"),
+        "Linux推荐配置": _requirements_text(linux_requirements, "recommended"),
+        "DLC AppID列表": _join(data.get("dlc", []) or []),
+        "Demo列表": _demos_text(data.get("demos")),
+        "所属完整游戏": _appid_name(data.get("fullgame")),
+        "安装包ID列表": _join(data.get("packages", []) or []),
+        "套餐/版本列表": _package_groups_text(data.get("package_groups")),
+        "内容描述": _content_descriptors_text(data.get("content_descriptors")),
+        "分级信息": _ratings_text(data.get("ratings")),
+        "客服网站": support_info.get("url", ""),
+        "客服邮箱": support_info.get("email", ""),
+        "客服电话": support_info.get("phone", ""),
+        "第三方账号提示": _clean_text(data.get("ext_user_account_notice"), max_length=1000),
+        "DRM提示": _clean_text(data.get("drm_notice"), max_length=1000),
+        "法律声明": _clean_text(data.get("legal_notice"), max_length=1000),
         "短简介": _clean_text(data.get("short_description"), max_length=1000),
         "详细简介": _clean_text(data.get("detailed_description"), max_length=3000),
         "总评描述": review_summary.get("review_score_desc", ""),
+        "总评分数": review_summary.get("review_score", ""),
         "总评数": total_reviews or "",
         "好评数": total_positive or "",
         "差评数": total_negative or "",
@@ -908,11 +1116,16 @@ def _build_app_row(
         "Metacritic": metacritic.get("score", ""),
         "当前在线": current_players,
         "成就数量": achievement_count,
+        "成就样本列表": achievement_sample,
         "新闻样本数": news_count,
-        "评论样本数": review_count,
+        "玩家评论样本数": review_count,
         "商店链接": _store_url(item.appid),
         "官网": data.get("website", ""),
         "头图": data.get("header_image", ""),
+        "胶囊图": data.get("capsule_image", ""),
+        "胶囊图V5": data.get("capsule_imagev5", ""),
+        "背景图": data.get("background", ""),
+        "原始背景图": data.get("background_raw", ""),
         "截图列表": _join([shot.get("path_full", "") for shot in screenshots if isinstance(shot, dict)]),
         "视频列表": _join([_movie_url(movie) for movie in movies if isinstance(movie, dict)]),
         "查询时间": query_time,
@@ -922,11 +1135,6 @@ def _build_app_row(
 def _build_review_row(item: SteamWorkItem, app_data: dict[str, Any], review: dict[str, Any], query_time: str) -> dict[str, Any]:
     author = review.get("author") if isinstance(review.get("author"), dict) else {}
     steamid = str(author.get("steamid", "") or "")
-    playtime = author.get("playtime_forever", "")
-    try:
-        play_hours = round(float(playtime or 0) / 60, 1)
-    except (TypeError, ValueError):
-        play_hours = ""
     return {
         "来源类型": item.source_type,
         "搜索词": item.source,
@@ -936,9 +1144,21 @@ def _build_review_row(item: SteamWorkItem, app_data: dict[str, Any], review: dic
         "SteamID": steamid,
         "是否推荐": _yes_no(review.get("voted_up")),
         "语言": review.get("language", ""),
+        "Steam购买": _yes_no(review.get("steam_purchase")),
+        "免费获得": _yes_no(review.get("received_for_free")),
+        "抢先体验期间": _yes_no(review.get("written_during_early_access")),
+        "主要在SteamDeck": _yes_no(review.get("primarily_steam_deck")),
+        "拥有游戏数": author.get("num_games_owned", ""),
+        "作者评论数": author.get("num_reviews", ""),
+        "总游玩小时": _minutes_to_hours(author.get("playtime_forever")),
+        "近两周游玩小时": _minutes_to_hours(author.get("playtime_last_two_weeks")),
+        "评价时游玩小时": _minutes_to_hours(author.get("playtime_at_review")),
+        "最后游玩时间": _format_timestamp(author.get("last_played")),
         "有价值票数": review.get("votes_up", ""),
         "欢乐票数": review.get("votes_funny", ""),
-        "游玩小时": play_hours,
+        "加权评分": review.get("weighted_vote_score", ""),
+        "开发者回复": _clean_text(review.get("developer_response"), max_length=3000),
+        "开发者回复时间": _format_timestamp(review.get("timestamp_dev_responded")),
         "发布时间": _format_timestamp(review.get("timestamp_created")),
         "最后更新时间": _format_timestamp(review.get("timestamp_updated")),
         "评论链接": f"https://steamcommunity.com/profiles/{steamid}/recommended/{item.appid}/" if steamid else "",
@@ -957,6 +1177,11 @@ def _build_news_row(item: SteamWorkItem, app_data: dict[str, Any], news: dict[st
         "标题": _clean_text(news.get("title")),
         "作者": news.get("author", ""),
         "发布时间": _format_timestamp(news.get("date")),
+        "来源名称": news.get("feedlabel", ""),
+        "来源标签": news.get("feedname", ""),
+        "Feed名称": news.get("feedname", ""),
+        "Feed类型": news.get("feed_type", ""),
+        "外部链接": _yes_no(news.get("is_external_url")),
         "链接": news.get("url", ""),
         "内容摘要": _clean_text(news.get("contents"), max_length=2000),
         "查询时间": query_time,
@@ -1056,7 +1281,7 @@ def run_steam_api_spider(
     output_path, writer = open_checkpointed_multi_sheet_writer(
         checkpoint,
         default_output_path,
-        {"游戏信息": APP_FIELDS, "评论": REVIEW_FIELDS, "新闻": NEWS_FIELDS},
+        {"游戏信息": APP_FIELDS, "玩家评论": REVIEW_FIELDS, "新闻": NEWS_FIELDS},
         log_callback,
         autosave_every=save_batch_size,
     )
@@ -1144,7 +1369,7 @@ def run_steam_api_spider(
                     continue
                 writer.writerow("游戏信息", bundle.app_row)
                 for row in bundle.review_rows:
-                    writer.writerow("评论", row)
+                    writer.writerow("玩家评论", row)
                 for row in bundle.news_rows:
                     writer.writerow("新闻", row)
                 checkpoint.mark_completed(item.checkpoint_key, bundle.meta)
