@@ -197,6 +197,16 @@ class TestTaskCheckpoint(unittest.TestCase):
             self.assertEqual(list(workbook["profiles"].iter_rows(values_only=True)), [("url",), ("a",)])
             self.assertEqual(list(workbook["works"].iter_rows(values_only=True)), [("url", "title"), ("b", "title")])
 
+    def test_multi_sheet_writer_rejects_append_to_different_schema_workbook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "old_single_sheet.xlsx"
+            writer = XlsxRowWriter(str(output_path), ["topic", "profile"])
+            writer.writerow({"topic": "#old", "profile": "https://example.com"})
+            writer.save()
+
+            with self.assertRaises(ValueError):
+                MultiSheetXlsxWriter(str(output_path), {"profiles": ["url"], "works": ["url", "title"]}, append=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

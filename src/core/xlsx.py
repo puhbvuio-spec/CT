@@ -160,6 +160,11 @@ class MultiSheetXlsxWriter:
         workbook = load_workbook(self.output_path)
         worksheets = {}
         changed = False
+        requested_sheet_names = {sheet_name[:31] or "Sheet" for sheet_name in self.sheets_fields}
+        if requested_sheet_names.isdisjoint(set(workbook.sheetnames)):
+            has_existing_data = any(ws.max_row > 1 or ws.max_column > 1 for ws in workbook.worksheets)
+            if has_existing_data:
+                raise ValueError(f"Existing XLSX has no requested sheets and appears to use a different schema: {self.output_path}")
         for sheet_name, fieldnames in self.sheets_fields.items():
             excel_sheet_name = sheet_name[:31] or "Sheet"
             if excel_sheet_name in workbook.sheetnames:
@@ -208,4 +213,3 @@ class MultiSheetXlsxWriter:
                 except OSError:
                     pass
         self._rows_since_save = 0
-
