@@ -275,13 +275,23 @@ def collect_hashtag_seed_authors(
         source_seed_limit = max(1, int(max_seed_works or 1))
         source_author_limit = max(1, int(max_authors or 1))
         scroll_limit = dynamic_search_scroll_limit(source_seed_limit, max_topic_scrolls)
-        source_authors: dict[str, TikTokAuthorSeed] = {}
-        source_seen_links: set[str] = set()
+        source_prefix = source.url.lower() + "|"
+        source_authors: dict[str, TikTokAuthorSeed] = {
+            _author_key(seed.profile_url, seed.author_id): seed
+            for key, seed in authors.items()
+            if str(key).lower().startswith(source_prefix)
+        }
+        source_seen_links: set[str] = {
+            link
+            for seed in source_authors.values()
+            for link in seed.seed_links
+            if link
+        }
         source_inspected_count = 0
-        source_new_author_count = 0
+        source_new_author_count = len(source_authors)
         log_line(
             log_callback,
-            f"  本话题采样配额：最多检查 {source_seed_limit} 个种子视频，最多进入 {source_author_limit} 个作者主页。",
+            f"  本话题采样配额：最多检查 {source_seed_limit} 个种子视频，最多进入 {source_author_limit} 个作者主页；已恢复 {source_new_author_count} 个作者种子。",
         )
         no_new_rounds = 0
         source_seen_count = 0

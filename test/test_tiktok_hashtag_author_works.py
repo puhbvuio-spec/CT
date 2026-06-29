@@ -255,6 +255,49 @@ def test_hashtag_seed_cache_roundtrips_and_skips_completed_source():
     assert completed_sources == {source_ids[0]}
 
 
+def test_hashtag_cached_authors_count_toward_source_author_limit():
+    sources = parse_hashtag_sources(["cached topic"])
+    source = sources[0]
+    cached_seed = TikTokAuthorSeed(
+        profile_url="https://www.tiktok.com/@cached",
+        author_id="@cached",
+        keywords=[source.label],
+        seed_links=["https://www.tiktok.com/@cached/video/1"],
+    )
+    initial_authors = {
+        f"{source.url.lower()}|cached": cached_seed,
+    }
+
+    originals = {
+        "open_hashtag_page": hashtag_author_works.open_hashtag_page,
+        "dynamic_search_scroll_limit": hashtag_author_works.dynamic_search_scroll_limit,
+        "collect_visible_video_items": hashtag_author_works.collect_visible_video_items,
+    }
+    try:
+        hashtag_author_works.open_hashtag_page = lambda *args, **kwargs: True
+        hashtag_author_works.dynamic_search_scroll_limit = lambda *args, **kwargs: 1
+        hashtag_author_works.collect_visible_video_items = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cached author already fills source limit"))
+
+        authors = collect_hashtag_seed_authors(
+            object(),
+            object(),
+            sources,
+            None,
+            None,
+            False,
+            lambda message: None,
+            max_seed_works=10,
+            max_authors=1,
+            max_topic_scrolls=1,
+            initial_authors=initial_authors,
+        )
+    finally:
+        for name, value in originals.items():
+            setattr(hashtag_author_works, name, value)
+
+    assert authors == initial_authors
+
+
 def test_hashtag_author_works_tool_registered():
     window = TikTokHashtagAuthorWorksWindow.__new__(TikTokHashtagAuthorWorksWindow)
     defaults = {param.key: param.default for param in window.tool_config_params()}
@@ -279,5 +322,6 @@ if __name__ == "__main__":
     test_hashtag_page_failure_skips_source()
     test_hashtag_seed_budget_applies_per_source()
     test_hashtag_seed_cache_roundtrips_and_skips_completed_source()
+    test_hashtag_cached_authors_count_toward_source_author_limit()
     test_hashtag_author_works_tool_registered()
     print("tiktok hashtag author works tests passed")
