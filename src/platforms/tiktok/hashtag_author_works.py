@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -383,6 +385,205 @@ def collect_hashtag_seed_authors(
     return authors
 
 
+def collect_hashtag_seed_authors_parallel(
+    cdp_port_or_url: str,
+    sources: list[HashtagSource],
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+    limit_time_bool: bool,
+    log_callback,
+    stop_event=None,
+    pause_event=None,
+    max_seed_works: int = 300,
+    max_authors: int = 100,
+    max_topic_scrolls: int = MAX_SEARCH_SCROLLS,
+    topic_scroll_pause: float = SEARCH_SCROLL_PAUSE,
+    no_new_scroll_limit: int = 12,
+    page_timeout: int = PAGE_LOAD_TIMEOUT,
+    initial_authors: dict[str, TikTokAuthorSeed] | None = None,
+    completed_sources: set[str] | None = None,
+    seed_cache_callback=None,
+    parallel_windows: int = 1,
+) -> dict[str, TikTokAuthorSeed]:
+    authors: dict[str, TikTokAuthorSeed] = dict(initial_authors or {})
+    completed_sources = set(completed_sources or set())
+    worker_count = normalize_parallel_windows({"parallel_windows": parallel_windows})
+
+    for source_index, source in enumerate(sources, 1):
+        source_id = source.url
+        if source_id in completed_sources:
+            log_line(log_callback, f"[{source_index}/{len(sources)}] resume skip completed seed source: {source.label}")
+            continue
+        if should_stop(stop_event):
+            break
+        if wait_if_paused(pause_event, stop_event):
+            break
+
+        source_seed_limit = max(1, int(max_seed_works or 1))
+        source_author_limit = max(1, int(max_authors or 1))
+        scroll_limit = dynamic_search_scroll_limit(source_seed_limit, max_topic_scrolls)
+        source_prefix = source.url.lower() + "|"
+        source_authors: dict[str, TikTokAuthorSeed] = {
+            _author_key(seed.profile_url, seed.author_id): seed
+            for key, seed in authors.items()
+            if str(key).lower().startswith(source_prefix)
+        }
+        source_seen_links: set[str] = {
+            link
+            for seed in source_authors.values()
+            for link in seed.seed_links
+            if link
+        }
+        source_inspected_count = 0
+        source_new_author_count = len(source_authors)
+        source_seen_count = 0
+        lock = threading.RLock()
+        active_workers = min(worker_count, source_seed_limit)
+
+        log_line(
+            log_callback,
+            f"[{source_index}/{len(sources)}] parallel topic seed discovery: {source.label} "
+            f"windows={active_workers}, seed_limit={source_seed_limit}, author_limit={source_author_limit}, "
+            f"cached_authors={source_new_author_count}",
+        )
+
+        def _limits_reached() -> bool:
+            with lock:
+                return source_inspected_count >= source_seed_limit or source_new_author_count >= source_author_limit
+
+        def _reserve_video(video_url: str) -> tuple[bool, int]:
+            nonlocal source_inspected_count, source_seen_count
+            if not video_url:
+                return False, source_inspected_count
+            normalized_video_url = str(video_url).strip()
+            with lock:
+                if (
+                    not normalized_video_url
+                    or normalized_video_url in source_seen_links
+                    or source_inspected_count >= source_seed_limit
+                    or source_new_author_count >= source_author_limit
+                ):
+                    return False, source_inspected_count
+                source_seen_links.add(normalized_video_url)
+                source_inspected_count += 1
+                source_seen_count += 1
+                return True, source_inspected_count
+
+        def _merge_author(video_url: str, row: dict[str, str]) -> tuple[TikTokAuthorSeed | None, bool, int]:
+            nonlocal source_new_author_count
+            with lock:
+                author_key = _author_key(row.get("博主主页链接", ""), row.get("博主ID", ""))
+                is_new_author = bool(author_key and author_key not in source_authors)
+                if is_new_author and source_new_author_count >= source_author_limit:
+                    return None, False, source_new_author_count
+                seed = merge_seed_author(source_authors, source.label, video_url, row)
+                if seed and is_new_author:
+                    source_new_author_count += 1
+                return seed, is_new_author, source_new_author_count
+
+        def _worker(worker_index: int) -> int:
+            topic_page = detail_page = None
+            inspected_by_worker = 0
+            local_seen_links: set[str] = set()
+            with sync_playwright() as worker_playwright:
+                _, context = connect_existing_chromium(worker_playwright, cdp_port_or_url)
+                topic_page = context.new_page()
+                detail_page = context.new_page()
+                try:
+                    if not open_hashtag_page(
+                        topic_page,
+                        source,
+                        stop_event=stop_event,
+                        log_callback=log_callback,
+                        page_timeout=page_timeout,
+                    ):
+                        log_warn(log_callback, f"[T{worker_index}] topic page not ready: {source.label}")
+                        return inspected_by_worker
+
+                    no_new_rounds = 0
+                    for scroll_index in range(scroll_limit):
+                        if _limits_reached() or should_stop(stop_event):
+                            break
+                        if wait_if_paused(pause_event, stop_event):
+                            break
+
+                        new_items = collect_visible_video_items(topic_page, local_seen_links)
+                        if not new_items:
+                            no_new_rounds += 1
+                        else:
+                            no_new_rounds = 0
+
+                        for item in new_items:
+                            if _limits_reached() or should_stop(stop_event):
+                                break
+                            video_url = item.get("视频链接", "")
+                            reserved, current_count = _reserve_video(video_url)
+                            if not reserved:
+                                continue
+                            inspected_by_worker += 1
+                            try:
+                                derived_publish_time = derive_publish_time_from_video_url(video_url)
+                                if limit_time_bool and start_dt and end_dt and derived_publish_time and not in_date_range(derived_publish_time, start_dt, end_dt):
+                                    log_line(log_callback, f"  [T{worker_index}] skip seed outside video-id time: {derived_publish_time}")
+                                    continue
+
+                                row = extract_video_row(
+                                    detail_page,
+                                    source.label,
+                                    video_url,
+                                    item.get("播放量", ""),
+                                    profile_url=item.get("博主主页链接", ""),
+                                    stop_event=stop_event,
+                                )
+                                if limit_time_bool and start_dt and end_dt and not in_date_range(row.get("发布时间", ""), start_dt, end_dt):
+                                    log_line(log_callback, f"  [T{worker_index}] skip seed outside publish time: {row.get('发布时间') or 'unknown'}")
+                                    continue
+                                seed, is_new_author, author_count = _merge_author(video_url, row)
+                                if seed:
+                                    marker = "new" if is_new_author else "seen"
+                                    log_line(
+                                        log_callback,
+                                        f"  [T{worker_index}] seed {current_count}/{source_seed_limit}, "
+                                        f"authors={author_count}/{source_author_limit}, {marker}: {video_url}",
+                                    )
+                            except Exception as exc:
+                                log_warn(log_callback, f"  [T{worker_index}] skip seed video: {exc}")
+
+                        if no_new_rounds >= no_new_scroll_limit and scroll_index >= 5:
+                            break
+                        trigger_search_lazy_load(topic_page)
+                        if interruptible_sleep(topic_scroll_pause, stop_event):
+                            break
+                finally:
+                    for opened_page in (topic_page, detail_page):
+                        try:
+                            if opened_page is not None and not opened_page.is_closed():
+                                opened_page.close()
+                        except Exception:
+                            pass
+            return inspected_by_worker
+
+        with ThreadPoolExecutor(max_workers=active_workers) as executor:
+            futures = [executor.submit(_worker, worker_index) for worker_index in range(1, active_workers + 1)]
+            for future in as_completed(futures):
+                future.result()
+
+        for seed in source_authors.values():
+            authors[_topic_author_key(source, seed)] = seed
+        if source_seen_count == 0:
+            log_warn(log_callback, f"topic produced no seed videos: {source.label}")
+        if not should_stop(stop_event):
+            completed_sources.add(source_id)
+            if seed_cache_callback:
+                seed_cache_callback(authors, completed_sources)
+        log_line(
+            log_callback,
+            f"topic done: {source.label}, inspected={source_inspected_count}, authors={len(source_authors)}, total_items={len(authors)}",
+        )
+
+    return authors
+
+
 def run_tiktok_hashtag_author_works_spider(
     hashtag_inputs,
     limit_time_str,
@@ -448,6 +649,87 @@ def run_tiktok_hashtag_author_works_spider(
         source_ids = [source.url for source in sources]
         cached_authors, cached_sources = load_seed_author_cache(checkpoint, source_ids, log_callback=log_callback)
         ensure_chrome_for_cdp(cdp_port_or_url, log_callback=log_callback)
+        if parallel_windows > 1:
+            authors = collect_hashtag_seed_authors_parallel(
+                cdp_port_or_url,
+                sources,
+                start_dt,
+                end_dt,
+                limit_time_bool,
+                log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                max_seed_works=max_seed_works,
+                max_authors=max_authors,
+                max_topic_scrolls=max_topic_scrolls,
+                topic_scroll_pause=topic_scroll_pause,
+                no_new_scroll_limit=no_new_scroll_limit,
+                page_timeout=page_timeout,
+                initial_authors=cached_authors,
+                completed_sources=cached_sources,
+                seed_cache_callback=lambda current_authors, current_sources: save_seed_author_cache(
+                    checkpoint,
+                    source_ids,
+                    current_authors,
+                    current_sources,
+                ),
+                parallel_windows=parallel_windows,
+            )
+            if not authors:
+                log_warn(log_callback, "No valid authors found from hashtag pages.")
+                return
+
+            default_output_path = build_output_path(
+                "tiktok",
+                f"tiktok_hashtag_author_works_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+                channel="hashtag_author_works",
+            )
+            output_path, writer = open_checkpointed_multi_sheet_writer(
+                checkpoint,
+                default_output_path,
+                {
+                    "博主信息": HASHTAG_AUTHOR_FIELDS,
+                    "博主对应视频": HASHTAG_VIDEO_FIELDS,
+                },
+                log_callback=log_callback,
+                autosave_every=10,
+            )
+            checkpoint.add_output_path(output_path)
+
+            sheet_names = list(getattr(writer, "sheets_fields", {}).keys())
+            collect_author_works_with_parallel_windows(
+                list(authors.values()),
+                checkpoint=checkpoint,
+                output_path=output_path,
+                writer=writer,
+                cdp_port_or_url=cdp_port_or_url,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+                parallel_windows=parallel_windows,
+                page_timeout=page_timeout,
+                max_profile_scrolls=max_profile_scrolls,
+                max_profile_works=max_profile_works,
+                profile_scroll_interval=profile_scroll_interval,
+                no_new_scroll_limit=no_new_scroll_limit,
+                scroll_px=scroll_px,
+                detail_load_timeout=detail_load_timeout,
+                detail_delay_min=detail_delay_min,
+                detail_delay_max=detail_delay_max,
+                limit_time_bool=limit_time_bool,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                author_sheet_name=sheet_names[0],
+                video_sheet_name=sheet_names[1],
+                author_row_builder=_author_sheet_row_for_hashtag,
+                video_row_builder=_video_row_for_hashtag,
+                checkpoint_key_builder=_seed_checkpoint_key,
+            )
+            writer.save()
+            completed_path = output_path
+            log_line(log_callback, f"完成，已保存：{output_path}")
+            return
+
         with sync_playwright() as playwright:
             _, context = connect_existing_chromium(playwright, cdp_port_or_url)
             topic_page = context.new_page()
