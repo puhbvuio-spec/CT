@@ -38,15 +38,17 @@ class ToolSpec:
     summary: str             # 简短的工具功能介绍
     entrypoint: str          # 对应 Python 执行函数入口的点分路径
     implementation_path: str = ""  # 选填，实现文件路径
+    module: str = ""               # 选填，平台下的二级模块分组（如：Twitch 数据采集）
     tags: tuple[str, ...] = field(default_factory=tuple)  # 自定义过滤标签列表
 
-    def matches(self, query: str, category: str) -> bool:
+    def matches(self, query: str, category: str, module: str = "") -> bool:
         """
         判断当前工具是否与用户输入的检索关键字和侧边分类栏相匹配。
 
         Args:
             query: 检索关键词
-            category: 选中的标签分类
+            category: 选中的平台分类
+            module: 选中的二级模块分组
 
         Returns:
             bool: 匹配结果
@@ -54,10 +56,12 @@ class ToolSpec:
         # 分类校验匹配
         if category != ALL_CATEGORY and self.category != category:
             return False
+        if module and self.module != module:
+            return False
         if not query:
             return True
-        # 搜索过滤串：合并名称、分类、概述和标签，做大小写不敏感匹配
-        haystack = " ".join([self.name, self.category, self.summary, " ".join(self.tags)]).lower()
+        # 搜索过滤串：合并名称、分类、模块、概述和标签，做大小写不敏感匹配
+        haystack = " ".join([self.name, self.category, self.module, self.summary, " ".join(self.tags)]).lower()
         return query.lower() in haystack
 
 

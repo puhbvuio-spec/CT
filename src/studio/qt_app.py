@@ -18,8 +18,6 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -27,6 +25,8 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 # 全部分类常量，用于指示侧边栏拉取全部列表
 ALL_CATEGORY = "全部"
 # 分类在侧边栏显示时的固定排序权重
-CATEGORY_ORDER = [ALL_CATEGORY, "YouTube", "TikTok", "X/Twitter", "Steam", "Instagram", "Facebook", "数据处理"]
+CATEGORY_ORDER = [ALL_CATEGORY, "YouTube", "TikTok", "X/Twitter", "Steam", "Twitch", "Instagram", "Facebook", "数据处理", "工具"]
 
 
 class ThreePlatformCrawlerQtApp(QMainWindow):
@@ -77,7 +77,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         self.filtered_tools = []
         # 用字典记录所有处于运行状态的 QProcess 子进程，键为 tool_id
         self.processes: dict[str, QProcess] = {}
-        self.current_category = ALL_CATEGORY
+        self.current_filter = {"category": ALL_CATEGORY, "module": ""}
 
         self._build_ui()
         self._apply_style()
@@ -124,7 +124,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         title_row.addWidget(self.version_label)
 
         title_box.addLayout(title_row)
-        self.subtitle_label = QLabel("集中启动 YouTube、TikTok、X/Twitter、Instagram、Facebook 采集工具和数据处理工具")
+        self.subtitle_label = QLabel("集中启动 YouTube、TikTok、X/Twitter、Steam、Twitch、Instagram、Facebook 采集工具和数据处理工具")
         self.subtitle_label.setObjectName("subtitleLabel")
         title_box.addWidget(self.subtitle_label)
         header.addLayout(title_box, 1)
@@ -154,13 +154,12 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         root_layout.addWidget(splitter, 1)
 
-        # 1. 左侧导航分类列表
-        self.nav = QListWidget()
+        # 1. 左侧导航分类树
+        self.nav = QTreeWidget()
         self.nav.setObjectName("navList")
-        for category in self.category_order:
-            item = QListWidgetItem(self._category_label(category))
-            item.setData(Qt.UserRole, category)
-            self.nav.addItem(item)
+        self.nav.setHeaderHidden(True)
+        self.nav.setIndentation(16)
+        self._populate_nav_tree()
         self.nav.currentItemChanged.connect(self._on_category_changed)
         splitter.addWidget(self.nav)
 
@@ -228,7 +227,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         # 界面初始化尺寸比例配额
         splitter.setSizes([180, 520, 320])
         self.setCentralWidget(root)
-        self.nav.setCurrentRow(0)
+        self.nav.setCurrentItem(self.nav.topLevelItem(0))
 
         exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.close)
@@ -325,6 +324,15 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
                 background: #2563eb;
                 color: white;
             }
+            QTreeWidget::branch {
+                background: transparent;
+            }
+            QTreeWidget::branch:has-children:closed {
+                image: none;
+            }
+            QTreeWidget::branch:has-children:open {
+                image: none;
+            }
             QTableWidget {
                 background: #ffffff;
                 alternate-background-color: #f8fafc;
@@ -360,16 +368,69 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setFont(QFont("Microsoft YaHei UI", 9))
 
+    def _filter_key(self, category: str, module: str = "") -> dict[str, str]:
+        """构造侧边树节点使用的平台/模块过滤键。"""
+        return {"category": category, "module": module}
+
+    def _tool_category_path(self, tool) -> str:
+        """返回工具展示用的平台/模块路径。"""
+        return f"{tool.category} / {tool.module}" if tool.module else tool.category
+
+    def _module_labels_for_category(self, category: str) -> list[str]:
+        """按工具出现顺序提取某个平台下的二级模块。"""
+        modules: list[str] = []
+        seen: set[str] = set()
+        for tool in self.tools:
+            if tool.category != category or not tool.module or tool.module in seen:
+                continue
+            seen.add(tool.module)
+            modules.append(tool.module)
+        return modules
+
+    def _populate_nav_tree(self, selected_filter: dict[str, str] | None = None) -> None:
+        """按平台/模块构造左侧树形导航。"""
+        self.nav.clear()
+        selected_filter = selected_filter or self.current_filter
+        selected_item: QTreeWidgetItem | None = None
+
+        for category in self.category_order:
+            item = QTreeWidgetItem([self._category_label(category)])
+            item.setData(0, Qt.UserRole, self._filter_key(category))
+            self.nav.addTopLevelItem(item)
+            if item.data(0, Qt.UserRole) == selected_filter:
+                selected_item = item
+
+            if category == ALL_CATEGORY:
+                continue
+            for module in self._module_labels_for_category(category):
+                child = QTreeWidgetItem([self._module_label(category, module)])
+                child.setData(0, Qt.UserRole, self._filter_key(category, module))
+                item.addChild(child)
+                if child.data(0, Qt.UserRole) == selected_filter:
+                    selected_item = child
+            if item.childCount():
+                item.setExpanded(True)
+
+        if selected_item is None and self.nav.topLevelItemCount():
+            selected_item = self.nav.topLevelItem(0)
+        if selected_item is not None:
+            self.nav.setCurrentItem(selected_item)
+
     def _category_label(self, category: str) -> str:
-        """获取分类按钮的数字统计标签文本，形如 'TikTok 4'。"""
+        """获取平台分类的数字统计标签文本，形如 'TikTok 4'。"""
         if category == ALL_CATEGORY:
             return f"全部  {len(self.tools)}"
         count = sum(1 for tool in self.tools if tool.category == category)
         return f"{category}  {count}"
 
-    def _on_category_changed(self, current: QListWidgetItem | None) -> None:
-        """侧边分类栏选定槽：记录分类键并触发右侧表格项过滤。"""
-        self.current_category = current.data(Qt.UserRole) if current else ALL_CATEGORY
+    def _module_label(self, category: str, module: str) -> str:
+        """获取二级模块的数字统计标签文本。"""
+        count = sum(1 for tool in self.tools if tool.category == category and tool.module == module)
+        return f"{module}  {count}"
+
+    def _on_category_changed(self, current: QTreeWidgetItem | None) -> None:
+        """侧边分类栏选定槽：记录平台/模块过滤键并触发右侧表格项过滤。"""
+        self.current_filter = current.data(0, Qt.UserRole) if current else self._filter_key(ALL_CATEGORY)
         self.refresh_tools()
 
     def _setup_watcher(self) -> None:
@@ -411,7 +472,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         logger.info("Reloading tools from manifests")
         
         # 备份历史聚焦项
-        old_category = self.current_category
+        old_filter = dict(self.current_filter)
         old_tool = self.selected_tool()
         old_tool_id = old_tool.tool_id if old_tool else None
 
@@ -420,18 +481,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         self.category_order = [*CATEGORY_ORDER, *extra_categories]
 
         # 刷新侧边分类树
-        self.nav.clear()
-        found_category = False
-        for i, category in enumerate(self.category_order):
-            item = QListWidgetItem(self._category_label(category))
-            item.setData(Qt.UserRole, category)
-            self.nav.addItem(item)
-            if category == old_category:
-                self.nav.setCurrentRow(i)
-                found_category = True
-        
-        if not found_category:
-            self.nav.setCurrentRow(0)
+        self._populate_nav_tree(old_filter)
 
         self.refresh_tools()
         
@@ -476,20 +526,24 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
         核心刷新动作：提取检索过滤文本与分类标签，比对 ToolSpec 信息，清空并重新填装 QTableWidget 节点。
         """
         query = self.search_entry.text().strip().lower()
-        category = self.current_category
+        filter_key = self.current_filter
+        category = filter_key.get("category", ALL_CATEGORY)
+        module = filter_key.get("module", "")
 
         self.filtered_tools = []
         for tool in self.tools:
             if category != ALL_CATEGORY and tool.category != category:
                 continue
-            haystack = " ".join([tool.name, tool.category, tool.summary, " ".join(tool.tags)]).lower()
+            if module and tool.module != module:
+                continue
+            haystack = " ".join([tool.name, tool.category, tool.module, tool.summary, " ".join(tool.tags)]).lower()
             if query and query not in haystack:
                 continue
             self.filtered_tools.append(tool)
 
         self.table.setRowCount(len(self.filtered_tools))
         for row, tool in enumerate(self.filtered_tools):
-            for column, text in enumerate([tool.name, tool.category]):
+            for column, text in enumerate([tool.name, self._tool_category_path(tool)]):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, tool.tool_id)
                 self.table.setItem(row, column, item)
@@ -519,7 +573,7 @@ class ThreePlatformCrawlerQtApp(QMainWindow):
             return
         self.detail_name.setText(tool.name)
         tags = " / ".join(tool.tags) if tool.tags else "无标签"
-        self.detail_meta.setText(f"{tool.category}    {tags}")
+        self.detail_meta.setText(f"{self._tool_category_path(tool)}    {tags}")
         self.detail_script.setText(tool.implementation_path or tool.entrypoint)
         self.detail_summary.setPlainText(tool.summary)
         self.open_btn.setEnabled(True)

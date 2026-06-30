@@ -196,6 +196,7 @@ TOOLS: list[ToolSpec] = [
         summary="按 Steam AppID、商店链接或关键词采集游戏商店信息；可选采集玩家评论、玩家画像、公开游戏库、公开好友、新闻、当前在线人数和成就数量。",
         entrypoint="src.platforms.steam.windows.SteamApiResearchWindow",
         implementation_path="platforms/steam/api.py",
+        module="Steam API / 公开接口",
         tags=("Steam", "API", "store", "reviews", "news", "games"),
     ),
     ToolSpec(
@@ -205,6 +206,7 @@ TOOLS: list[ToolSpec] = [
         summary="通过本机 Chrome/Edge 动态窗口采集 SteamDB App 概览、Charts、Packages、DLCs、Depots 和 History 的可见页面数据；遇到浏览器检查/阻止时暂停提示用户处理。",
         entrypoint="src.platforms.steam.windows.SteamDbDynamicWindow",
         implementation_path="platforms/steam/steamdb.py",
+        module="SteamDB 动态窗口",
         tags=("Steam", "SteamDB", "browser", "charts", "packages", "depots", "history"),
     ),
     ToolSpec(
@@ -214,6 +216,7 @@ TOOLS: list[ToolSpec] = [
         summary="读取已有 Steam 玩家评论表或手填 SteamID，补采玩家公开资料、公开游戏库、公开好友、最近游玩、目标游戏成就和徽章，用于构建游戏玩家画像。",
         entrypoint="src.platforms.steam.windows.SteamPlayerProfilesWindow",
         implementation_path="platforms/steam/api.py",
+        module="Steam API / 公开接口",
         tags=("Steam", "players", "reviews", "profile", "owned_games", "achievements"),
     ),
     ToolSpec(
@@ -223,6 +226,7 @@ TOOLS: list[ToolSpec] = [
         summary="按 Twitch 游戏名或 Game ID 采集当前直播、VOD 回放、Clips 片段和全平台 Top Games。",
         entrypoint="src.platforms.twitch.windows.TwitchGameContentWindow",
         implementation_path="platforms/twitch/api.py",
+        module="Twitch 数据采集",
         tags=("Twitch", "API", "streams", "videos", "clips", "games"),
     ),
     ToolSpec(
@@ -232,6 +236,7 @@ TOOLS: list[ToolSpec] = [
         summary="按关键词搜索 Twitch 频道，并通过热门 VOD 挖掘创作者，补采关注者、创作者等级、注册时间和简介后输出 KOL 评分表。",
         entrypoint="src.platforms.twitch.windows.TwitchKolDiscoveryWindow",
         implementation_path="platforms/twitch/api.py",
+        module="Twitch 数据采集",
         tags=("Twitch", "API", "KOL", "channels", "followers", "videos"),
     ),
     ToolSpec(

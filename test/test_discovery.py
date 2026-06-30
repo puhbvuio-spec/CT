@@ -22,6 +22,7 @@ def test_discover_all_tools():
         assert tool.tool_id, "tool_id 不能为空"
         assert tool.name, "name 不能为空"
         assert tool.category, "category 不能为空"
+        assert hasattr(tool, "module"), "module 字段必须存在"
         assert tool.entrypoint, "entrypoint 不能为空"
 
     print("[PASS] 所有工具结构验证通过")
@@ -49,6 +50,8 @@ def test_discover_by_category():
     assert len(categories["TikTok"]) == 9, f"TikTok 工具数量错误: {len(categories['TikTok'])}"
     assert len(categories["Steam"]) == 3, f"Steam 工具数量错误: {len(categories['Steam'])}"
     assert len(categories["Twitch"]) == 2, f"Twitch 工具数量错误: {len(categories['Twitch'])}"
+    assert {tool.module for tool in categories["Twitch"]} == {"Twitch 数据采集"}, "Twitch 模块分组错误"
+    assert {tool.module for tool in categories["Steam"]} == {"Steam API / 公开接口", "SteamDB 动态窗口"}, "Steam 模块分组错误"
     assert len(categories["Instagram"]) == 1, f"Instagram 工具数量错误: {len(categories['Instagram'])}"
     assert len(categories["Facebook"]) == 2, f"Facebook 工具数量错误: {len(categories['Facebook'])}"
     assert len(categories["数据处理"]) == 3, f"数据处理工具数量错误: {len(categories['数据处理'])}"
@@ -76,6 +79,7 @@ def test_load_manifest_valid():
         "tool_id": "test_tool",
         "name": "测试工具",
         "category": "测试",
+        "module": "测试模块",
         "summary": "这是一个测试工具",
         "entrypoint": "src.test.TestWindow",
         "tags": ["test", "demo"]
@@ -91,10 +95,37 @@ def test_load_manifest_valid():
         assert tool.tool_id == "test_tool"
         assert tool.name == "测试工具"
         assert tool.category == "测试"
+        assert tool.module == "测试模块"
         assert tool.tags == ("test", "demo")
         print("[PASS] 有效 manifest 加载验证通过")
     finally:
         temp_path.unlink()
+
+def test_load_manifest_optional_module():
+    """测试 module 是可选字段，旧 manifest 仍可加载"""
+    manifest_content = {
+        "tool_id": "legacy_tool",
+        "name": "旧格式工具",
+        "category": "旧分类",
+        "summary": "未声明 module 的旧格式工具",
+        "entrypoint": "src.legacy.LegacyWindow",
+        "tags": ["legacy"]
+    }
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.manifest.json', delete=False, encoding='utf-8') as f:
+        json.dump(manifest_content, f, ensure_ascii=False)
+        temp_path = Path(f.name)
+
+    try:
+        tool, _ = _load_manifest(temp_path)
+        assert tool is not None, "旧格式 manifest 加载失败"
+        assert tool.module == ""
+        assert tool.matches("旧格式", "旧分类")
+        assert tool.matches("旧格式", "旧分类", "")
+        print("[PASS] 可选 module 加载验证通过")
+    finally:
+        temp_path.unlink()
+
 
 def test_load_manifest_missing_fields():
     """测试加载缺少必要字段的 manifest"""
@@ -189,6 +220,7 @@ def test_find_tool_covers_all_discovered():
         found = find_tool(tool.tool_id)
         assert found is not None, f"find_tool 找不到 '{tool.tool_id}'"
         assert found.tool_id == tool.tool_id, f"find_tool('{tool.tool_id}') 返回了错误的工具 '{found.tool_id}'"
+        assert found.module == tool.module, f"find_tool('{tool.tool_id}') 返回的模块分组不一致"
 
         # implementation_path 对应的文件必须存在
         if tool.implementation_path:
@@ -208,6 +240,7 @@ def run_all_tests():
         test_discover_by_category,
         test_discover_specific_tool,
         test_load_manifest_valid,
+        test_load_manifest_optional_module,
         test_load_manifest_missing_fields,
         test_load_manifest_invalid_json,
         test_discover_custom_dir,

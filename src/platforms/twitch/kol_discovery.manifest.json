@@ -2,6 +2,7 @@
   "tool_id": "twitch_kol_discovery",
   "name": "Twitch KOL 发现",
   "category": "Twitch",
+  "module": "Twitch 数据采集",
   "summary": "按关键词搜索 Twitch 频道，并通过热门 VOD 挖掘创作者，补采关注者、创作者等级、注册时间和简介后输出 KOL 评分表。",
   "entrypoint": "src.platforms.twitch.windows.TwitchKolDiscoveryWindow",
   "implementation_path": "platforms/twitch/api.py",

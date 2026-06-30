@@ -99,6 +99,7 @@ def _load_manifest(path: Path) -> tuple[ToolSpec | None, str | None]:
         return None, err
 
     tags = tuple(data.get("tags", []))
+    module = str(data.get("module") or data.get("group") or "").strip()
 
     tool = ToolSpec(
         tool_id=data["tool_id"],
@@ -107,6 +108,7 @@ def _load_manifest(path: Path) -> tuple[ToolSpec | None, str | None]:
         summary=data["summary"],
         entrypoint=data["entrypoint"],
         implementation_path=data.get("implementation_path", ""),
+        module=module,
         tags=tags,
     )
     return tool, None

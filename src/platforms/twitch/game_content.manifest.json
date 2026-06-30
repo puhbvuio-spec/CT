@@ -2,6 +2,7 @@
   "tool_id": "twitch_game_content",
   "name": "Twitch 游戏内容采集",
   "category": "Twitch",
+  "module": "Twitch 数据采集",
   "summary": "按 Twitch 游戏名或 Game ID 采集当前直播、VOD 回放、Clips 片段和全平台 Top Games。",
   "entrypoint": "src.platforms.twitch.windows.TwitchGameContentWindow",
   "implementation_path": "platforms/twitch/api.py",

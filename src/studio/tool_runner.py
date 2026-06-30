@@ -23,13 +23,13 @@ logger = get_logger(__name__)
 def find_tool(tool_id: str):
     """
     根据 ID 检索对应的工具元数据。
-    第一阶段搜寻硬编码静态注册表，如果未命中则在第二阶段执行目录扫描搜寻动态清单配置文件。
+    优先使用动态 manifest，静态注册表仅作为旧版本兼容兜底。
     """
-    for tool in TOOLS:
-        if tool.tool_id == tool_id:
-            return tool
     discovered, _ = discover_tools()
     for tool in discovered:
+        if tool.tool_id == tool_id:
+            return tool
+    for tool in TOOLS:
         if tool.tool_id == tool_id:
             return tool
     raise ValueError(f"Unknown tool_id: {tool_id}")
@@ -44,6 +44,8 @@ def check_tool(tool_id: str) -> dict[str, str | bool]:
     return {
         "tool_id": tool.tool_id,
         "name": tool.name,
+        "category": tool.category,
+        "module": tool.module,
         "entrypoint": tool.entrypoint,
         "implementation_path": tool.implementation_path,
         "script_exists": script_path.exists(),

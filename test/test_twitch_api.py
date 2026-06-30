@@ -30,14 +30,22 @@ from src.studio.registry import TOOLS
 
 
 def test_twitch_tool_registered():
-    static_ids = {tool.tool_id for tool in TOOLS}
-    assert "twitch_game_content" in static_ids
-    assert "twitch_kol_discovery" in static_ids
+    static_by_id = {tool.tool_id: tool for tool in TOOLS}
+    assert "twitch_game_content" in static_by_id
+    assert "twitch_kol_discovery" in static_by_id
+    assert static_by_id["twitch_game_content"].category == "Twitch"
+    assert static_by_id["twitch_kol_discovery"].category == "Twitch"
+    assert static_by_id["twitch_game_content"].module == "Twitch 数据采集"
+    assert static_by_id["twitch_kol_discovery"].module == "Twitch 数据采集"
 
     discovered, errors = discover_tools()
-    discovered_ids = {tool.tool_id for tool in discovered}
-    assert "twitch_game_content" in discovered_ids
-    assert "twitch_kol_discovery" in discovered_ids
+    discovered_by_id = {tool.tool_id: tool for tool in discovered}
+    assert "twitch_game_content" in discovered_by_id
+    assert "twitch_kol_discovery" in discovered_by_id
+    assert discovered_by_id["twitch_game_content"].category == "Twitch"
+    assert discovered_by_id["twitch_kol_discovery"].category == "Twitch"
+    assert discovered_by_id["twitch_game_content"].module == "Twitch 数据采集"
+    assert discovered_by_id["twitch_kol_discovery"].module == "Twitch 数据采集"
     assert not [error for error in errors if "twitch" in error.lower()]
 
 

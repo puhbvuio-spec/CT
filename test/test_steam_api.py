@@ -40,15 +40,24 @@ def test_normalize_keywords_deduplicates_case_and_spaces():
 
 
 def test_steam_api_tool_registered():
-    static_ids = {tool.tool_id for tool in TOOLS}
-    assert "steam_api_research" in static_ids
-    assert "steam_player_profiles" in static_ids
-    assert "steamdb_dynamic_window" in static_ids
+    static_by_id = {tool.tool_id: tool for tool in TOOLS}
+    assert "steam_api_research" in static_by_id
+    assert "steam_player_profiles" in static_by_id
+    assert "steamdb_dynamic_window" in static_by_id
+    assert static_by_id["steam_api_research"].module == "Steam API / 公开接口"
+    assert static_by_id["steam_player_profiles"].module == "Steam API / 公开接口"
+    assert static_by_id["steamdb_dynamic_window"].module == "SteamDB 动态窗口"
     discovered, errors = discover_tools()
-    discovered_ids = {tool.tool_id for tool in discovered}
-    assert "steam_api_research" in discovered_ids
-    assert "steam_player_profiles" in discovered_ids
-    assert "steamdb_dynamic_window" in discovered_ids
+    discovered_by_id = {tool.tool_id: tool for tool in discovered}
+    assert "steam_api_research" in discovered_by_id
+    assert "steam_player_profiles" in discovered_by_id
+    assert "steamdb_dynamic_window" in discovered_by_id
+    assert discovered_by_id["steam_api_research"].category == "Steam"
+    assert discovered_by_id["steam_player_profiles"].category == "Steam"
+    assert discovered_by_id["steamdb_dynamic_window"].category == "Steam"
+    assert discovered_by_id["steam_api_research"].module == "Steam API / 公开接口"
+    assert discovered_by_id["steam_player_profiles"].module == "Steam API / 公开接口"
+    assert discovered_by_id["steamdb_dynamic_window"].module == "SteamDB 动态窗口"
     assert not [error for error in errors if "steam" in error.lower()]
 
 
