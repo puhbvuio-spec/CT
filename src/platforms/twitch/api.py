@@ -25,6 +25,11 @@ from src.core import (
 )
 from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.core.xlsx import MultiSheetXlsxWriter
+from src.platforms.twitch.sullygnome import (
+    SULLYGNOME_GAME_SUMMARY_FIELDS,
+    SULLYGNOME_VISIBLE_TABLE_FIELDS,
+    collect_sullygnome_for_games,
+)
 
 
 AUTH_URL = "https://id.twitch.tv/oauth2/token"
@@ -719,6 +724,14 @@ def run_twitch_game_content_spider(
     video_min_views = max(0, int(config.get("video_min_views", 0) or 0))
     clip_days_back = max(1, int(config.get("clip_days_back", 7) or 7))
     clip_min_views = max(0, int(config.get("clip_min_views", 0) or 0))
+    collect_sullygnome = _config_bool(config, "collect_sullygnome", "否")
+    sullygnome_summary_range = str(config.get("sullygnome_summary_range", "30") or "30").strip()
+    sullygnome_collect_visible_tables = _config_bool(config, "sullygnome_collect_visible_tables", "是")
+    sullygnome_visible_table_limit = max(1, min(100, int(config.get("sullygnome_visible_table_limit", 25) or 25)))
+    sullygnome_max_scrolls = max(0, min(10, int(config.get("sullygnome_max_scrolls", 2) or 0)))
+    sullygnome_request_delay = max(0.0, float(config.get("sullygnome_request_delay", 5.0) or 0.0))
+    sullygnome_page_timeout = max(5000, int(config.get("sullygnome_page_timeout", 30000) or 30000))
+    sullygnome_browser = str(config.get("sullygnome_browser", "Chrome") or "Chrome").strip() or "Chrome"
     collect_streams = str(collect_streams_choice or "否") == "是"
     collect_videos = str(collect_videos_choice or "否") == "是"
     collect_clips = str(collect_clips_choice or "否") == "是"
@@ -742,6 +755,11 @@ def run_twitch_game_content_spider(
         "video_min_views": video_min_views,
         "clip_days_back": clip_days_back,
         "clip_min_views": clip_min_views,
+        "collect_sullygnome": collect_sullygnome,
+        "sullygnome_summary_range": sullygnome_summary_range,
+        "sullygnome_collect_visible_tables": sullygnome_collect_visible_tables,
+        "sullygnome_visible_table_limit": sullygnome_visible_table_limit,
+        "sullygnome_max_scrolls": sullygnome_max_scrolls,
     }
     checkpoint = open_task_checkpoint(
         "twitch_game_content",
@@ -763,6 +781,11 @@ def run_twitch_game_content_spider(
             "video_min_views",
             "clip_days_back",
             "clip_min_views",
+            "collect_sullygnome",
+            "sullygnome_summary_range",
+            "sullygnome_collect_visible_tables",
+            "sullygnome_visible_table_limit",
+            "sullygnome_max_scrolls",
         ),
     )
     default_output_path = build_output_path(
@@ -779,6 +802,8 @@ def run_twitch_game_content_spider(
             "VOD回放": VIDEO_FIELDS,
             "Clips片段": CLIP_FIELDS,
             "TopGames": TOP_GAME_FIELDS,
+            "SullyGnome摘要": SULLYGNOME_GAME_SUMMARY_FIELDS,
+            "SullyGnome可见表": SULLYGNOME_VISIBLE_TABLE_FIELDS,
         },
         log_callback,
         autosave_every=save_batch_size,
@@ -810,6 +835,7 @@ def run_twitch_game_content_spider(
 
         games = resolve_games(client, game_inputs, log_callback)
         log_line(log_callback, f"本次 Twitch 游戏内容任务候选 {len(games)} 个游戏。")
+        sullygnome_games: list[TwitchGameItem] = []
         for index, game in enumerate(games, start=1):
             if wait_if_paused(pause_event, stop_event) or should_stop(stop_event):
                 break
@@ -853,6 +879,8 @@ def run_twitch_game_content_spider(
                     key,
                     {"status": "ok", "stream_rows": len(stream_rows), "video_rows": len(video_rows), "clip_rows": len(clip_rows)},
                 )
+                if collect_sullygnome:
+                    sullygnome_games.append(game)
                 completed += 1
                 log_line(log_callback, f"[{index}/{len(games)}] 完成 {game.name}：直播 {len(stream_rows)}，VOD {len(video_rows)}，Clips {len(clip_rows)}。")
             except InterruptedError:
@@ -862,6 +890,27 @@ def run_twitch_game_content_spider(
                 checkpoint.release_item(key)
                 log_error(log_callback, f"[{index}/{len(games)}] Twitch 游戏采集失败 {game.name or game.game_id}: {exc}")
                 continue
+
+        if collect_sullygnome and sullygnome_games and not should_stop(stop_event):
+            log_line(log_callback, f"开始 SullyGnome 低频补采：{len(sullygnome_games)} 个游戏。")
+            summary_rows, visible_table_rows = collect_sullygnome_for_games(
+                sullygnome_games,
+                browser=sullygnome_browser,
+                summary_range=sullygnome_summary_range,
+                collect_visible_tables=sullygnome_collect_visible_tables,
+                visible_table_limit=sullygnome_visible_table_limit,
+                max_scrolls=sullygnome_max_scrolls,
+                request_delay=sullygnome_request_delay,
+                page_timeout=sullygnome_page_timeout,
+                log_callback=log_callback,
+                stop_event=stop_event,
+                pause_event=pause_event,
+            )
+            for row in summary_rows:
+                writer.writerow("SullyGnome摘要", row)
+            for row in visible_table_rows:
+                writer.writerow("SullyGnome可见表", row)
+            log_line(log_callback, f"SullyGnome 补采完成：摘要 {len(summary_rows)} 行，可见表 {len(visible_table_rows)} 行。")
     finally:
         try:
             writer.save()
