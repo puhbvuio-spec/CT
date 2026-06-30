@@ -16,6 +16,7 @@ PLATFORM_DIRS = {
     "twitter": "x",
     "data": "data",
     "steam": "steam",
+    "twitch": "twitch",
 }
 
 # 用于从文件名中识别动作日期（YYYYMMDD）的匹配模式。

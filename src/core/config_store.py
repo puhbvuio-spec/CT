@@ -203,6 +203,30 @@ DEFAULT_CONFIGS: dict[str, dict] = {
         "request_delay": 0.2,
         "save_batch_size": 10,
     },
+    "twitch_game_content": {
+        "language": "",
+        "video_period": "month",
+        "video_sort": "views",
+        "video_type": "archive",
+        "video_months_back": 0,
+        "video_min_views": 0,
+        "clip_days_back": 7,
+        "clip_min_views": 0,
+        "request_timeout": 30,
+        "request_delay": 0.1,
+        "save_batch_size": 10,
+    },
+    "twitch_kol_discovery": {
+        "search_count_per_keyword": 8,
+        "search_live_only": "否",
+        "max_vods_per_game": 10,
+        "enrich_workers": 5,
+        "min_followers": 50,
+        "min_total_score": 20.0,
+        "request_timeout": 30,
+        "request_delay": 0.1,
+        "save_batch_size": 10,
+    },
     "x_keyword_video_search": {
         "slice_days": 7,                       # 时间跨度切分天数，用于按区间精准爬取
         "search_page_timeout": 40000,          # 别名保留
