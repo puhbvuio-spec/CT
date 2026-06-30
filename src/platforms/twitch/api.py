@@ -26,6 +26,7 @@ from src.core import (
 from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.core.xlsx import MultiSheetXlsxWriter
 from src.platforms.twitch.sullygnome import (
+    SULLYGNOME_DOWNLOAD_FIELDS,
     SULLYGNOME_GAME_SUMMARY_FIELDS,
     SULLYGNOME_VISIBLE_TABLE_FIELDS,
     collect_sullygnome_for_games,
@@ -732,6 +733,8 @@ def run_twitch_game_content_spider(
     sullygnome_request_delay = max(0.0, float(config.get("sullygnome_request_delay", 5.0) or 0.0))
     sullygnome_page_timeout = max(5000, int(config.get("sullygnome_page_timeout", 30000) or 30000))
     sullygnome_browser = str(config.get("sullygnome_browser", "Chrome") or "Chrome").strip() or "Chrome"
+    sullygnome_download_visible_data = _config_bool(config, "sullygnome_download_visible_data", "否")
+    sullygnome_download_max_per_page = max(1, min(10, int(config.get("sullygnome_download_max_per_page", 1) or 1)))
     collect_streams = str(collect_streams_choice or "否") == "是"
     collect_videos = str(collect_videos_choice or "否") == "是"
     collect_clips = str(collect_clips_choice or "否") == "是"
@@ -760,6 +763,8 @@ def run_twitch_game_content_spider(
         "sullygnome_collect_visible_tables": sullygnome_collect_visible_tables,
         "sullygnome_visible_table_limit": sullygnome_visible_table_limit,
         "sullygnome_max_scrolls": sullygnome_max_scrolls,
+        "sullygnome_download_visible_data": sullygnome_download_visible_data,
+        "sullygnome_download_max_per_page": sullygnome_download_max_per_page,
     }
     checkpoint = open_task_checkpoint(
         "twitch_game_content",
@@ -786,6 +791,8 @@ def run_twitch_game_content_spider(
             "sullygnome_collect_visible_tables",
             "sullygnome_visible_table_limit",
             "sullygnome_max_scrolls",
+            "sullygnome_download_visible_data",
+            "sullygnome_download_max_per_page",
         ),
     )
     default_output_path = build_output_path(
@@ -804,6 +811,7 @@ def run_twitch_game_content_spider(
             "TopGames": TOP_GAME_FIELDS,
             "SullyGnome摘要": SULLYGNOME_GAME_SUMMARY_FIELDS,
             "SullyGnome可见表": SULLYGNOME_VISIBLE_TABLE_FIELDS,
+            "SullyGnome下载文件": SULLYGNOME_DOWNLOAD_FIELDS,
         },
         log_callback,
         autosave_every=save_batch_size,
@@ -893,7 +901,7 @@ def run_twitch_game_content_spider(
 
         if collect_sullygnome and sullygnome_games and not should_stop(stop_event):
             log_line(log_callback, f"开始 SullyGnome 低频补采：{len(sullygnome_games)} 个游戏。")
-            summary_rows, visible_table_rows = collect_sullygnome_for_games(
+            summary_rows, visible_table_rows, download_rows = collect_sullygnome_for_games(
                 sullygnome_games,
                 browser=sullygnome_browser,
                 summary_range=sullygnome_summary_range,
@@ -902,6 +910,8 @@ def run_twitch_game_content_spider(
                 max_scrolls=sullygnome_max_scrolls,
                 request_delay=sullygnome_request_delay,
                 page_timeout=sullygnome_page_timeout,
+                download_visible_data=sullygnome_download_visible_data,
+                download_max_per_page=sullygnome_download_max_per_page,
                 log_callback=log_callback,
                 stop_event=stop_event,
                 pause_event=pause_event,
@@ -910,7 +920,9 @@ def run_twitch_game_content_spider(
                 writer.writerow("SullyGnome摘要", row)
             for row in visible_table_rows:
                 writer.writerow("SullyGnome可见表", row)
-            log_line(log_callback, f"SullyGnome 补采完成：摘要 {len(summary_rows)} 行，可见表 {len(visible_table_rows)} 行。")
+            for row in download_rows:
+                writer.writerow("SullyGnome下载文件", row)
+            log_line(log_callback, f"SullyGnome 补采完成：摘要 {len(summary_rows)} 行，可见表 {len(visible_table_rows)} 行，下载记录 {len(download_rows)} 行。")
     finally:
         try:
             writer.save()

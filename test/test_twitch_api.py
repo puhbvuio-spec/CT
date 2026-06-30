@@ -10,6 +10,7 @@ from src.platforms.twitch.api import (
     CLIP_FIELDS,
     KOL_FIELDS,
     STREAM_FIELDS,
+    SULLYGNOME_DOWNLOAD_FIELDS,
     SULLYGNOME_GAME_SUMMARY_FIELDS,
     SULLYGNOME_VISIBLE_TABLE_FIELDS,
     TOP_GAME_FIELDS,
@@ -58,6 +59,8 @@ def test_twitch_fields_present():
     assert "总分" in KOL_FIELDS
     assert "Hours watched" in SULLYGNOME_GAME_SUMMARY_FIELDS
     assert "可见指标文本" in SULLYGNOME_VISIBLE_TABLE_FIELDS
+    assert "单元格JSON" in SULLYGNOME_VISIBLE_TABLE_FIELDS
+    assert "保存路径" in SULLYGNOME_DOWNLOAD_FIELDS
 
 
 def test_parse_twitch_game_inputs():
@@ -110,10 +113,14 @@ def test_sullygnome_visible_table_row_builder():
         entity_name="demo",
         entity_url="https://sullygnome.com/channel/demo",
         metrics_text="1 | demo | 100,000",
+        headers=["Rank", "Channel", "Hours Watched"],
+        cells=["1", "demo", "100,000"],
     )
     assert row["Game ID"] == "509658"
     assert row["SullyGnome Slug"] == "Just_Chatting"
     assert row["实体名称"] == "demo"
+    assert "Hours Watched" in row["表头JSON"]
+    assert "100,000" in row["单元格JSON"]
     assert row["状态"] == "ok"
 
 

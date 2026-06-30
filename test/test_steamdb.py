@@ -3,7 +3,10 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from src.core.browser_downloads import _looks_downloadable
 from src.platforms.steam.steamdb import (
+    STEAMDB_DOWNLOAD_FIELDS,
+    STEAMDB_SHEETS_FIELDS,
     SteamDbPageSnapshot,
     SteamDbWorkItem,
     build_depot_rows,
@@ -105,6 +108,51 @@ def test_build_page_rows_from_visible_tables():
     assert history_row["变更ID"] == "987654"
 
 
+def test_steamdb_download_sheet_fields():
+    assert "下载文件" in STEAMDB_SHEETS_FIELDS
+    assert "保存路径" in STEAMDB_DOWNLOAD_FIELDS
+    assert "状态" in STEAMDB_DOWNLOAD_FIELDS
+
+
+def test_history_prefers_changeid_tables():
+    snapshot = _snapshot("history")
+    snapshot.tables = [
+        {
+            "table_index": 1,
+            "title": "App info",
+            "headers": [],
+            "rows": [
+                {"row_index": 1, "cells": ["App ID", "1623730"], "links": []},
+            ],
+        },
+        {
+            "table_index": 2,
+            "title": "History",
+            "headers": [],
+            "rows": [
+                {
+                    "row_index": 1,
+                    "cells": ["30 June 2026", "Changed", "Depot update"],
+                    "links": [{"text": "Change", "href": "/app/1623730/history/?changeid=987654"}],
+                },
+            ],
+        },
+    ]
+    rows = build_history_rows(snapshot)
+    assert len(rows) == 1
+    assert rows[0]["变更ID"] == "987654"
+    assert rows[0]["变更时间"] == "30 June 2026"
+
+
+def test_download_detection_ignores_navigation_labels():
+    assert not _looks_downloadable("Metadata", "https://steamdb.info/app/730/info/", "")
+    assert not _looks_downloadable("Charts", "https://steamdb.info/app/730/charts/", "")
+    assert not _looks_downloadable("Download image", "https://example.test/chart.png", "")
+    assert not _looks_downloadable("Chart menu", "", "")
+    assert _looks_downloadable("CSV", "", "")
+    assert _looks_downloadable("Export data", "", "")
+    assert _looks_downloadable("", "https://example.test/export.csv", "")
+
 def run_all_tests():
     tests = [
         test_parse_steamdb_app_ids,
@@ -112,6 +160,9 @@ def run_all_tests():
         test_detect_steamdb_block,
         test_build_overview_row,
         test_build_page_rows_from_visible_tables,
+        test_steamdb_download_sheet_fields,
+        test_history_prefers_changeid_tables,
+        test_download_detection_ignores_navigation_labels,
     ]
     for test in tests:
         test()

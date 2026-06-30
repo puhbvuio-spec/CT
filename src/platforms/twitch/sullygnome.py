@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from src.core import cdp_url_for_browser, connect_existing_chromium, interruptible_sleep, log_line, log_warn, should_stop, wait_if_paused
+from src.core.browser_downloads import VISIBLE_DOWNLOAD_FIELDS, download_visible_page_data
 
 BASE_URL = "https://sullygnome.com"
 
@@ -60,10 +62,22 @@ SULLYGNOME_VISIBLE_TABLE_FIELDS = [
     "行号",
     "实体名称",
     "实体链接",
+    "表头JSON",
+    "单元格JSON",
+    "链接JSON",
     "可见指标文本",
     "状态",
     "备注",
     "查询时间",
+]
+
+SULLYGNOME_DOWNLOAD_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "Game ID",
+    "游戏名",
+    "SullyGnome Slug",
+    *VISIBLE_DOWNLOAD_FIELDS,
 ]
 
 
@@ -159,6 +173,9 @@ def build_sullygnome_visible_table_row(
     entity_name: str = "",
     entity_url: str = "",
     metrics_text: str = "",
+    headers: list[str] | None = None,
+    cells: list[str] | None = None,
+    links: list[dict[str, Any]] | None = None,
     status: str = "ok",
     note: str = "",
 ) -> dict[str, Any]:
@@ -172,11 +189,26 @@ def build_sullygnome_visible_table_row(
         "行号": rank,
         "实体名称": entity_name,
         "实体链接": entity_url,
+        "表头JSON": json.dumps(headers or [], ensure_ascii=False),
+        "单元格JSON": json.dumps(cells or [], ensure_ascii=False),
+        "链接JSON": json.dumps(links or [], ensure_ascii=False),
         "可见指标文本": metrics_text,
         "状态": status,
         "备注": note,
         "查询时间": now_text(),
     }
+
+
+def build_sullygnome_download_row(game: SullyGnomeGameRef | Any, *, slug: str, download_row: dict[str, Any]) -> dict[str, Any]:
+    row = {
+        "来源类型": getattr(game, "source_type", ""),
+        "搜索词": getattr(game, "source", ""),
+        "Game ID": getattr(game, "game_id", ""),
+        "游戏名": getattr(game, "name", ""),
+        "SullyGnome Slug": slug,
+    }
+    row.update({field: download_row.get(field, "") for field in VISIBLE_DOWNLOAD_FIELDS})
+    return row
 
 
 def _first_match(text: str, patterns: list[str]) -> str:
@@ -304,23 +336,43 @@ def _absolute_url(href: str) -> str:
     return f"{BASE_URL}/{text}"
 
 
-def _visible_table_rows(page) -> list[dict[str, str]]:
+def _visible_table_rows(page) -> list[dict[str, Any]]:
     try:
         return page.evaluate(
             """
             () => {
-                const tables = Array.from(document.querySelectorAll('table'));
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+                    const rects = el.getClientRects();
+                    return rects && rects.length > 0;
+                };
+                const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                const tables = Array.from(document.querySelectorAll('table')).filter(visible);
                 const out = [];
                 for (const table of tables) {
-                    const rows = Array.from(table.querySelectorAll('tbody tr'));
+                    const headers = Array.from(table.querySelectorAll('thead th')).map(th => clean(th.innerText || th.textContent)).filter(Boolean);
+                    const rowNodes = Array.from(table.querySelectorAll('tbody tr'));
+                    const rows = rowNodes.length ? rowNodes : Array.from(table.querySelectorAll('tr')).slice(headers.length ? 1 : 0);
                     for (const tr of rows) {
-                        const cells = Array.from(tr.querySelectorAll('td')).map(td => (td.innerText || td.textContent || '').trim()).filter(Boolean);
+                        if (!visible(tr)) continue;
+                        const cellNodes = Array.from(tr.querySelectorAll('th,td'));
+                        const cells = cellNodes.map(td => clean(td.innerText || td.textContent)).filter(Boolean);
                         if (!cells.length) continue;
-                        const link = tr.querySelector('a[href]');
+                        const links = Array.from(tr.querySelectorAll('a[href]')).map(a => ({
+                            text: clean(a.innerText || a.textContent),
+                            href: a.getAttribute('href') || '',
+                            absolute: a.href || ''
+                        })).filter(x => x.href || x.absolute);
+                        const link = links[0] || null;
                         out.push({
-                            name: link ? (link.innerText || link.textContent || '').trim() : (cells[1] || cells[0] || ''),
-                            href: link ? (link.getAttribute('href') || '') : '',
-                            text: cells.join(' | ')
+                            name: link ? link.text : (cells[1] || cells[0] || ''),
+                            href: link ? (link.href || link.absolute || '') : '',
+                            text: cells.join(' | '),
+                            headers,
+                            cells,
+                            links
                         });
                     }
                 }
@@ -414,6 +466,9 @@ def collect_sullygnome_visible_table_rows(
                     entity_name=_clean_text(item.get("name")),
                     entity_url=_absolute_url(item.get("href", "")),
                     metrics_text=_clean_text(item.get("text")),
+                    headers=item.get("headers") if isinstance(item.get("headers"), list) else [],
+                    cells=item.get("cells") if isinstance(item.get("cells"), list) else [],
+                    links=item.get("links") if isinstance(item.get("links"), list) else [],
                     status="ok",
                     note="仅采当前动态窗口可见表格，未做全量翻页。",
                 )
@@ -432,6 +487,125 @@ def collect_sullygnome_visible_table_rows(
         ]
 
 
+def collect_sullygnome_summary_download_rows(
+    page,
+    game: SullyGnomeGameRef | Any,
+    *,
+    summary_range: str = "30",
+    max_downloads: int = 1,
+    timeout: int = 10000,
+) -> list[dict[str, Any]]:
+    slug = normalize_sullygnome_game_slug(getattr(game, "name", ""))
+    url = build_sullygnome_game_url(slug, summary_range)
+    if not slug or not url:
+        return [
+            build_sullygnome_download_row(
+                game,
+                slug=slug,
+                download_row={
+                    "页面类型": "summary",
+                    "页面URL": url,
+                    "状态": "skipped",
+                    "备注": "缺少可用于 SullyGnome 的游戏名。",
+                    "查询时间": now_text(),
+                },
+            )
+        ]
+    try:
+        if not str(getattr(page, "url", "") or "").startswith(url):
+            page.goto(url, wait_until="domcontentloaded", timeout=max(1000, int(timeout or 10000)))
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(10000, max(1000, int(timeout or 10000))))
+            except PlaywrightTimeoutError:
+                pass
+        rows = download_visible_page_data(
+            page,
+            platform="twitch",
+            channel="sullygnome_downloads",
+            filename_prefix=f"sullygnome_{slug}_summary_{time.strftime('%Y%m%d_%H%M%S')}",
+            allowed_hosts=("sullygnome.com", "www.sullygnome.com"),
+            page_type="summary",
+            max_downloads=max(1, int(max_downloads or 1)),
+            timeout=max(1000, int(timeout or 10000)),
+        )
+        return [build_sullygnome_download_row(game, slug=slug, download_row=row) for row in rows]
+    except Exception as exc:
+        return [
+            build_sullygnome_download_row(
+                game,
+                slug=slug,
+                download_row={
+                    "页面类型": "summary",
+                    "页面URL": url,
+                    "最终URL": str(getattr(page, "url", "") or ""),
+                    "状态": "error",
+                    "备注": str(exc)[:500],
+                    "查询时间": now_text(),
+                },
+            )
+        ]
+
+
+def collect_sullygnome_table_download_rows(
+    page,
+    game: SullyGnomeGameRef | Any,
+    *,
+    table_type: str = "watched",
+    summary_range: str = "30",
+    max_downloads: int = 1,
+    timeout: int = 10000,
+) -> list[dict[str, Any]]:
+    slug = normalize_sullygnome_game_slug(getattr(game, "name", ""))
+    url = build_sullygnome_game_table_url(slug, table_type, summary_range)
+    if not slug or not url:
+        return [
+            build_sullygnome_download_row(
+                game,
+                slug=slug,
+                download_row={
+                    "页面类型": table_type,
+                    "页面URL": url,
+                    "状态": "skipped",
+                    "备注": "缺少可用于 SullyGnome 的游戏名。",
+                    "查询时间": now_text(),
+                },
+            )
+        ]
+    try:
+        if not str(getattr(page, "url", "") or "").startswith(url):
+            page.goto(url, wait_until="domcontentloaded", timeout=max(1000, int(timeout or 10000)))
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(10000, max(1000, int(timeout or 10000))))
+            except PlaywrightTimeoutError:
+                pass
+        rows = download_visible_page_data(
+            page,
+            platform="twitch",
+            channel="sullygnome_downloads",
+            filename_prefix=f"sullygnome_{slug}_{table_type}_{time.strftime('%Y%m%d_%H%M%S')}",
+            allowed_hosts=("sullygnome.com", "www.sullygnome.com"),
+            page_type=table_type,
+            max_downloads=max(1, int(max_downloads or 1)),
+            timeout=max(1000, int(timeout or 10000)),
+        )
+        return [build_sullygnome_download_row(game, slug=slug, download_row=row) for row in rows]
+    except Exception as exc:
+        return [
+            build_sullygnome_download_row(
+                game,
+                slug=slug,
+                download_row={
+                    "页面类型": table_type,
+                    "页面URL": url,
+                    "最终URL": str(getattr(page, "url", "") or ""),
+                    "状态": "error",
+                    "备注": str(exc)[:500],
+                    "查询时间": now_text(),
+                },
+            )
+        ]
+
+
 def collect_sullygnome_for_games(
     games: list[Any],
     *,
@@ -443,14 +617,17 @@ def collect_sullygnome_for_games(
     max_scrolls: int = 2,
     request_delay: float = 5.0,
     page_timeout: int = 30000,
+    download_visible_data: bool = False,
+    download_max_per_page: int = 1,
     log_callback=None,
     stop_event=None,
     pause_event=None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     summary_rows: list[dict[str, Any]] = []
     table_rows: list[dict[str, Any]] = []
+    download_rows: list[dict[str, Any]] = []
     if not games:
-        return summary_rows, table_rows
+        return summary_rows, table_rows, download_rows
     try:
         with sync_playwright() as playwright:
             resolved_cdp_url = cdp_url or cdp_url_for_browser(browser)
@@ -466,6 +643,16 @@ def collect_sullygnome_for_games(
                     summary_rows.append(
                         collect_sullygnome_game_summary(page, game, summary_range=summary_range, page_timeout=page_timeout)
                     )
+                    if download_visible_data:
+                        download_rows.extend(
+                            collect_sullygnome_summary_download_rows(
+                                page,
+                                game,
+                                summary_range=summary_range,
+                                max_downloads=download_max_per_page,
+                                timeout=page_timeout,
+                            )
+                        )
                     if collect_visible_tables:
                         table_rows.extend(
                             collect_sullygnome_visible_table_rows(
@@ -480,6 +667,17 @@ def collect_sullygnome_for_games(
                                 pause_event=pause_event,
                             )
                         )
+                        if download_visible_data:
+                            download_rows.extend(
+                                collect_sullygnome_table_download_rows(
+                                    page,
+                                    game,
+                                    table_type="watched",
+                                    summary_range=summary_range,
+                                    max_downloads=download_max_per_page,
+                                    timeout=page_timeout,
+                                )
+                            )
                     if index < len(games) and request_delay > 0:
                         if interruptible_sleep(float(request_delay), stop_event, pause_event=pause_event):
                             break
@@ -490,4 +688,4 @@ def collect_sullygnome_for_games(
                     pass
     except Exception as exc:
         log_warn(log_callback, f"SullyGnome 动态窗口补采失败：{exc}")
-    return summary_rows, table_rows
+    return summary_rows, table_rows, download_rows

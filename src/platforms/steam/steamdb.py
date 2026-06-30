@@ -28,6 +28,7 @@ from src.core import (
     should_stop,
     wait_if_paused,
 )
+from src.core.browser_downloads import VISIBLE_DOWNLOAD_FIELDS, download_visible_page_data, make_download_record
 from src.core.task_checkpoint import open_checkpointed_multi_sheet_writer, open_task_checkpoint
 from src.platforms.steam.api import discover_apps_for_keyword, normalize_keywords, parse_app_ids
 
@@ -173,6 +174,13 @@ STEAMDB_RAW_TABLE_FIELDS = [
     "查询时间",
 ]
 
+STEAMDB_DOWNLOAD_FIELDS = [
+    "来源类型",
+    "搜索词",
+    "AppID",
+    *VISIBLE_DOWNLOAD_FIELDS,
+]
+
 STEAMDB_SHEETS_FIELDS = {
     "采集状态": STEAMDB_STATUS_FIELDS,
     "概览": STEAMDB_OVERVIEW_FIELDS,
@@ -182,6 +190,7 @@ STEAMDB_SHEETS_FIELDS = {
     "Depots": STEAMDB_DEPOT_FIELDS,
     "History": STEAMDB_HISTORY_FIELDS,
     "RawTables": STEAMDB_RAW_TABLE_FIELDS,
+    "下载文件": STEAMDB_DOWNLOAD_FIELDS,
 }
 
 PAGE_LABELS = {
@@ -245,6 +254,7 @@ class SteamDbBundle:
     depot_rows: list[dict[str, Any]] = field(default_factory=list)
     history_rows: list[dict[str, Any]] = field(default_factory=list)
     raw_rows: list[dict[str, Any]] = field(default_factory=list)
+    download_rows: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def meta(self) -> dict[str, int]:
@@ -257,6 +267,7 @@ class SteamDbBundle:
             "depot_rows": len(self.depot_rows),
             "history_rows": len(self.history_rows),
             "raw_rows": len(self.raw_rows),
+            "download_rows": len(self.download_rows),
         }
 
 
@@ -424,7 +435,21 @@ def _row_visible_text(row: dict[str, Any], *, max_length: int = 4000) -> str:
 
 def _rows_from_tables(snapshot: SteamDbPageSnapshot) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for table in snapshot.tables:
+    tables = snapshot.tables
+    if snapshot.page_type == "history":
+        history_tables = []
+        for table in tables:
+            table_text = " ".join(
+                " ".join(str(cell or "") for cell in (row.get("cells", []) or []))
+                + " "
+                + " ".join(str((link or {}).get("href") or "") for link in (row.get("links", []) or []))
+                for row in (table.get("rows", []) or [])
+            ).lower()
+            if "changeid=" in table_text or "/history/" in table_text:
+                history_tables.append(table)
+        if history_tables:
+            tables = history_tables
+    for table in tables:
         for row in table.get("rows", []) or []:
             rows.append({"table": table, "row": row})
     return rows
@@ -595,6 +620,49 @@ def load_steamdb_page(
         snapshot.status = "error"
         snapshot.note = str(exc)[:500]
     return snapshot
+
+
+def build_download_row(snapshot: SteamDbPageSnapshot, download_row: dict[str, Any]) -> dict[str, Any]:
+    row = {
+        "来源类型": snapshot.item.source_type,
+        "搜索词": snapshot.item.source,
+        "AppID": snapshot.item.appid,
+    }
+    row.update({field: download_row.get(field, "") for field in VISIBLE_DOWNLOAD_FIELDS})
+    return row
+
+
+def collect_steamdb_download_rows(
+    page,
+    snapshot: SteamDbPageSnapshot,
+    *,
+    max_downloads: int = 1,
+    timeout: int = 10000,
+) -> list[dict[str, Any]]:
+    if snapshot.status not in {"ok", "empty"}:
+        return [
+            build_download_row(
+                snapshot,
+                make_download_record(
+                    page_type=PAGE_LABELS.get(snapshot.page_type, snapshot.page_type),
+                    page_url=snapshot.url,
+                    final_url=snapshot.final_url,
+                    status="skipped",
+                    note=f"页面状态为 {snapshot.status}，未尝试下载。",
+                ),
+            )
+        ]
+    rows = download_visible_page_data(
+        page,
+        platform="steam",
+        channel="steamdb_downloads",
+        filename_prefix=f"steamdb_{snapshot.item.appid}_{snapshot.page_type}_{time.strftime('%Y%m%d_%H%M%S')}",
+        allowed_hosts=("steamdb.info", "www.steamdb.info"),
+        page_type=PAGE_LABELS.get(snapshot.page_type, snapshot.page_type),
+        max_downloads=max(1, int(max_downloads or 1)),
+        timeout=max(1000, int(timeout or 10000)),
+    )
+    return [build_download_row(snapshot, row) for row in rows]
 
 
 def build_status_row(snapshot: SteamDbPageSnapshot) -> dict[str, Any]:
@@ -858,6 +926,8 @@ def collect_steamdb_app_bundle(
     max_scrolls: int,
     max_table_rows_per_page: int,
     block_handling: str,
+    download_visible_data: bool = False,
+    download_max_per_page: int = 1,
     log_callback=None,
     stop_event=None,
     pause_event=None,
@@ -893,6 +963,15 @@ def collect_steamdb_app_bundle(
             bundle.depot_rows.extend(build_depot_rows(snapshot))
         elif page_type == "history":
             bundle.history_rows.extend(build_history_rows(snapshot))
+        if download_visible_data:
+            bundle.download_rows.extend(
+                collect_steamdb_download_rows(
+                    page,
+                    snapshot,
+                    max_downloads=download_max_per_page,
+                    timeout=page_timeout,
+                )
+            )
         if snapshot.status == "blocked":
             log_warn(log_callback, f"SteamDB {PAGE_LABELS.get(page_type, page_type)} 仍处于阻止页：AppID={item.appid}")
         if index < len(page_types) - 1 and page_delay > 0:
@@ -995,6 +1074,8 @@ def _write_bundle(writer, bundle: SteamDbBundle) -> None:
         writer.writerow("History", row)
     for row in bundle.raw_rows:
         writer.writerow("RawTables", row)
+    for row in bundle.download_rows:
+        writer.writerow("下载文件", row)
 
 
 def run_steamdb_dynamic_window_spider(
@@ -1069,6 +1150,8 @@ def run_steamdb_dynamic_window_spider(
     max_scrolls = max(0, int(config.get("max_scrolls", 1) or 0))
     max_table_rows_per_page = max(1, int(config.get("max_table_rows_per_page", 100) or 100))
     block_handling = str(config.get("block_handling", "只暂停提示") or "只暂停提示")
+    download_visible_data = _yes(config.get("steamdb_download_visible_data", config.get("download_visible_data")), "否")
+    download_max_per_page = max(1, min(10, int(config.get("steamdb_download_max_per_page", config.get("download_max_per_page", 1)) or 1)))
 
     completed_this_run = 0
     try:
@@ -1105,6 +1188,8 @@ def run_steamdb_dynamic_window_spider(
                             max_scrolls=max_scrolls,
                             max_table_rows_per_page=max_table_rows_per_page,
                             block_handling=block_handling,
+                            download_visible_data=download_visible_data,
+                            download_max_per_page=download_max_per_page,
                             log_callback=log_callback,
                             stop_event=stop_event,
                             pause_event=pause_event,
@@ -1122,7 +1207,7 @@ def run_steamdb_dynamic_window_spider(
                     log_line(
                         log_callback,
                         f"[{index}/{len(items)}] SteamDB 完成 AppID={item.appid}，"
-                        f"状态 {len(bundle.status_rows)}，RawTables {len(bundle.raw_rows)} 行。",
+                        f"状态 {len(bundle.status_rows)}，RawTables {len(bundle.raw_rows)} 行，下载记录 {len(bundle.download_rows)} 行。",
                     )
                 try:
                     page.close()
@@ -1154,6 +1239,7 @@ __all__ = [
     "STEAMDB_DEPOT_FIELDS",
     "STEAMDB_HISTORY_FIELDS",
     "STEAMDB_RAW_TABLE_FIELDS",
+    "STEAMDB_DOWNLOAD_FIELDS",
     "STEAMDB_SHEETS_FIELDS",
     "SteamDbWorkItem",
     "SteamDbPageSnapshot",
