@@ -1,0 +1,9 @@
+{
+  "tool_id": "steamdb_dynamic_window",
+  "name": "SteamDB 动态窗口采集",
+  "category": "Steam",
+  "summary": "通过本机 Chrome/Edge 动态窗口采集 SteamDB App 概览、Charts、Packages、DLCs、Depots 和 History 的可见页面数据；遇到浏览器检查/阻止时暂停提示用户处理。",
+  "entrypoint": "src.platforms.steam.windows.SteamDbDynamicWindow",
+  "implementation_path": "platforms/steam/steamdb.py",
+  "tags": ["Steam", "SteamDB", "browser", "charts", "packages", "depots", "history"]
+}

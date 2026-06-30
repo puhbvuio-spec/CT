@@ -21,6 +21,103 @@ def _player_profile_config_params() -> list[ConfigParam]:
     ]
 
 
+class SteamDbDynamicWindow(SimpleToolWindow):
+    tool_id = "steamdb_dynamic_window"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "SteamDB 动态窗口采集",
+            [
+                FieldSpec("app_ids", "AppID / SteamDB / 商店链接", kind="text_or_file", placeholder="https://steamdb.info/app/1623730/\nhttps://store.steampowered.com/app/1623730/Palworld/\n1623730"),
+                FieldSpec("keywords", "关键词（可选，用 Steam 商店公开接口发现 AppID）", kind="text_or_file", placeholder="monster taming games\npokemon like"),
+                FieldSpec("xlsx_path", "已有 Excel（可选，读取 AppID 列）", kind="file", placeholder="选择 Steam API / SteamDB 产出的 xlsx"),
+                FieldSpec("language", "关键词发现语言", kind="combo", options=("english", "schinese", "japanese", "tchinese", "koreana", "french", "german", "spanish", "russian"), default="english"),
+                FieldSpec("country", "关键词发现地区代码", default="US", placeholder="US / JP / CN"),
+            ],
+            height=780,
+        )
+
+    def validate_values(self, values):
+        from pathlib import Path
+        from src.platforms.steam.steamdb import parse_steamdb_app_ids
+        from src.platforms.steam.api import normalize_keywords
+
+        appids = parse_steamdb_app_ids(values.get("app_ids", ""))
+        keywords = normalize_keywords(values.get("keywords", ""))
+        xlsx_path = str(values.get("xlsx_path", "")).strip()
+        if not appids and not keywords and not xlsx_path:
+            raise ValueError("至少需要输入一个 SteamDB/Steam AppID/链接、关键词，或包含 AppID 的 Excel。")
+        if xlsx_path and not Path(xlsx_path).exists():
+            raise ValueError(f"Excel 文件不存在：{xlsx_path}")
+        country = str(values.get("country", "")).strip()
+        if country and not (len(country) == 2 and country.isalpha()):
+            raise ValueError("地区代码请填写 2 位国家/地区代码，例如 US、JP、CN。")
+
+    def tool_config_params(self):
+        return [
+            ConfigParam("steamdb_browser", "动态窗口浏览器", kind="combo", options=("chrome", "edge", "auto"), default="chrome", tooltip="通过 CDP 连接本机 Chrome/Edge 动态窗口；不会使用 requests 直接请求 SteamDB。"),
+            ConfigParam("collect_overview", "采集概览页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("collect_charts", "采集 Charts 页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("collect_packages", "采集 Packages 页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("collect_dlcs", "采集 DLCs 页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("collect_depots", "采集 Depots 页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("collect_history", "采集 History 页", kind="combo", options=("是", "否"), default="是"),
+            ConfigParam("block_handling", "遇到浏览器检查/阻止", kind="combo", options=("只暂停提示",), default="只暂停提示", tooltip="发现 Checking your browser / STOP / Forbidden 等页面时暂停并提示用户手动处理，不绕过保护。"),
+            ConfigParam("max_apps", "最多采集 App 数", kind="int", default=100, minimum=1, maximum=10000),
+            ConfigParam("max_apps_per_keyword", "每关键词最多 App 数", kind="int", default=20, minimum=1, maximum=1000),
+            ConfigParam("keyword_search_mode", "关键词发现方式", kind="combo", options=("商店搜索接口（推荐）", "商店搜索后补 AppList", "AppList 本地匹配"), default="商店搜索接口（推荐）"),
+            ConfigParam("include_non_games", "关键词发现保留非游戏 App", kind="combo", options=("否", "是"), default="否"),
+            ConfigParam("page_timeout", "页面加载超时(毫秒)", kind="int", default=30000, minimum=5000, maximum=120000, step=1000),
+            ConfigParam("after_load_wait", "页面加载后等待(秒)", kind="float", default=2.0, minimum=0.0, maximum=30.0, step=0.5, decimals=1),
+            ConfigParam("page_delay", "页面间隔(秒)", kind="float", default=5.0, minimum=0.0, maximum=120.0, step=0.5, decimals=1),
+            ConfigParam("max_scrolls", "每页最多滚动次数", kind="int", default=1, minimum=0, maximum=50),
+            ConfigParam("max_table_rows_per_page", "每表最多可见行", kind="int", default=100, minimum=1, maximum=5000),
+            ConfigParam("request_timeout", "关键词发现 API 超时(秒)", kind="int", default=30, minimum=5, maximum=180),
+            ConfigParam("request_delay", "关键词发现 API 间隔(秒)", kind="float", default=0.2, minimum=0.0, maximum=10.0, step=0.1, decimals=1),
+            ConfigParam("cache_ttl_hours", "关键词/AppList 缓存有效期(小时)", kind="int", default=168, minimum=0, maximum=8760),
+            ConfigParam("save_batch_size", "每批保存条数", kind="int", default=5, minimum=1, maximum=100),
+        ]
+
+    def run_task(self, values, log_callback, finish_callback, stop_event, pause_event):
+        from src.platforms.steam.steamdb import run_steamdb_dynamic_window_spider
+
+        config_keys = {
+            "steamdb_browser",
+            "collect_overview",
+            "collect_charts",
+            "collect_packages",
+            "collect_dlcs",
+            "collect_depots",
+            "collect_history",
+            "block_handling",
+            "max_apps",
+            "max_apps_per_keyword",
+            "keyword_search_mode",
+            "include_non_games",
+            "page_timeout",
+            "after_load_wait",
+            "page_delay",
+            "max_scrolls",
+            "max_table_rows_per_page",
+            "request_timeout",
+            "request_delay",
+            "cache_ttl_hours",
+            "save_batch_size",
+        }
+        config = {k: v for k, v in values.items() if k in {"language", "country"}}
+        config.update({k: v for k, v in self.config_values.items() if k in config_keys})
+        return run_steamdb_dynamic_window_spider(
+            values.get("app_ids", ""),
+            values.get("keywords", ""),
+            values.get("xlsx_path", ""),
+            log_callback,
+            finish_callback,
+            stop_event,
+            pause_event=pause_event,
+            config=config,
+        )
+
+
 class SteamApiResearchWindow(SimpleToolWindow):
     tool_id = "steam_api_research"
 

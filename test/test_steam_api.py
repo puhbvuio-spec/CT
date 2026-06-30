@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.platforms.steam.api import (
     APP_FIELDS,
     NEWS_FIELDS,
@@ -38,10 +43,12 @@ def test_steam_api_tool_registered():
     static_ids = {tool.tool_id for tool in TOOLS}
     assert "steam_api_research" in static_ids
     assert "steam_player_profiles" in static_ids
+    assert "steamdb_dynamic_window" in static_ids
     discovered, errors = discover_tools()
     discovered_ids = {tool.tool_id for tool in discovered}
     assert "steam_api_research" in discovered_ids
     assert "steam_player_profiles" in discovered_ids
+    assert "steamdb_dynamic_window" in discovered_ids
     assert not [error for error in errors if "steam" in error.lower()]
 
 
